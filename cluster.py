@@ -358,9 +358,14 @@ def process_common_folder_at_level(common_dir: Path, progress_callback=None):
     
     print(f"🔍 Найдены папки людей: {[d.name for d in person_dirs]}")
     
-    # Кластеризуем ТОЛЬКО фото из папки "общие"
+    # Кластеризуем ТОЛЬКО фото из папки "общие"  
+    print(f"🔍 Вызываем build_plan_live для: {common_dir}")
     data = build_plan_live(common_dir, include_excluded=True, progress_callback=progress_callback)
     plan = data.get('plan', [])
+    
+    print(f"🔍 Получен план с {len(plan)} файлами")
+    if plan:
+        print(f"🔍 Первые файлы в плане: {[item['path'] for item in plan[:3]]}")
     
     if not plan:
         print(f"❌ Нет фото для обработки в {common_dir}")
@@ -380,6 +385,9 @@ def process_common_folder_at_level(common_dir: Path, progress_callback=None):
                 dst = target_dir / item_path.name
                 
                 # Проверяем, что файл не копируется сам в себя
+                print(f"🔍 Проверяем копирование: {item_path} → {dst}")
+                print(f"🔍 Resolved пути: {item_path.resolve()} vs {dst.resolve()}")
+                
                 if item_path.resolve() != dst.resolve():
                     try:
                         shutil.copy2(str(item_path), str(dst))
