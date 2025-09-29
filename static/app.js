@@ -517,8 +517,12 @@ class PhotoClusterApp {
 
             const url = `/api/process?includeExcluded=${this.includeExcluded}`;
             const response = await fetch(url, { method: 'POST' });
-
             const result = await response.json();
+            if (!response.ok) {
+                // Показать текст ошибки из detail
+                this.showNotification(result.detail || result.message || 'Ошибка при запуске обработки', 'error');
+                return;
+            }
             this.showNotification(result.message, 'success');
             
             await this.loadQueue();
