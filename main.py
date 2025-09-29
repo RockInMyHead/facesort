@@ -353,14 +353,15 @@ async def get_queue():
     return {"queue": app_state["queue"]}
 
 @app.post("/api/queue/add")
-async def add_to_queue(item: QueueItem):
+async def add_to_queue(item: QueueItem, includeExcluded: bool = False):
     """Добавить папку в очередь"""
-    # Проверяем, что папка не содержит исключаемые названия
-    excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
-    folder_name_lower = str(item.path).lower()
-    for excluded_name in excluded_names:
-        if excluded_name in folder_name_lower:
-            raise HTTPException(status_code=400, detail=f"Папки с названием '{excluded_name}' не обрабатываются")
+    # Проверяем, что папка не содержит исключаемые названия, если не разрешено включать общие
+    if not includeExcluded:
+        excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+        folder_name_lower = str(item.path).lower()
+        for excluded_name in excluded_names:
+            if excluded_name in folder_name_lower:
+                raise HTTPException(status_code=400, detail=f"Папки с названием '{excluded_name}' не обрабатываются")
     
     if item.path not in app_state["queue"]:
         app_state["queue"].append(item.path)
