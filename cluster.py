@@ -134,6 +134,10 @@ def build_plan_live(
             and not any(ex in str(p).lower() for ex in excluded_names)
         ]
 
+    print(f"🔍 build_plan_live: input_dir={input_dir}, include_excluded={include_excluded}, найдено {len(all_images)} изображений")
+    if len(all_images) > 0:
+        print(f"🔍 Первые несколько файлов: {[str(p) for p in all_images[:3]]}")
+    
     if progress_callback:
         progress_callback(f"📂 Сканируется: {input_dir}, найдено изображений: {len(all_images)}", 1)
 
@@ -321,7 +325,9 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
     """
     cluster_counter = 1
     
-    print(f"🔍 process_group_folder вызвана для: {group_dir}, include_excluded={include_excluded}")
+    import time
+    call_id = int(time.time() * 1000) % 10000
+    print(f"🔍 process_group_folder [{call_id}] вызвана для: {group_dir}, include_excluded={include_excluded}")
     
     if include_excluded:
         # Копируем фото из общей папки в существующие папки людей
@@ -347,6 +353,7 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
             progress_callback("🔄 Анализ общих фотографий для копирования", 20)
         
         # Кластеризуем ТОЛЬКО общие фото с учетом всех фото для определения кластеров
+        print(f"🔍 Вызываем build_plan_live для common_dir: {common_dir}")
         data = build_plan_live(common_dir, include_excluded=True, progress_callback=progress_callback)
         clusters = data.get('clusters', {})
         plan = data.get('plan', [])
@@ -376,7 +383,7 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
         if progress_callback:
             progress_callback(f"✅ Копировано общих фото: {copied}", 100)
         
-        print(f"✅ Обработка общих фото завершена: скопировано {copied} файлов")
+        print(f"✅ Обработка общих фото [{call_id}] завершена: скопировано {copied} файлов")
         return 0, copied, cluster_counter
     # Обрабатываем каждую подпапку, исключая папки 'общие'
     subfolders = [f for f in sorted(group_dir.iterdir()) if f.is_dir() and "общие" not in f.name.lower()]
@@ -385,7 +392,7 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
         if progress_callback:
             percent = 10 + int((i + 1) / max(total_subfolders, 1) * 80)
             progress_callback(f"🔍 Обрабатывается подпапка: {subfolder.name} ({i+1}/{total_subfolders})", percent)
-        print(f"🔍 Обрабатывается подпапка: {subfolder}")
+        print(f"🔍 Обрабатывается подпапка [{call_id}]: {subfolder}")
         plan = build_plan_live(subfolder, progress_callback=progress_callback)
         print(f"📊 Кластеров: {len(plan.get('clusters', {}))}, файлов: {len(plan.get('plan', []))}")
         moved, copied, cluster_counter = distribute_to_folders(
