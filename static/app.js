@@ -69,6 +69,12 @@ class PhotoClusterApp {
         this.includeExcludedBtn.addEventListener('click', () => {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
+            
+            if (this.includeExcluded) {
+                // Если включили режим "Общие", автоматически добавляем все папки с исключаемыми названиями в очередь
+                this.addExcludedFoldersToQueue();
+            }
+            
             // Запускаем обработку очереди с учётом включенных 'общих' папок
             this.processQueue();
         });
@@ -382,19 +388,47 @@ class PhotoClusterApp {
         this.fileInput.value = '';
     }
 
-    async addToQueue(path) {
-        // Если не включена обработка исключенных папок, проверяем их
-        if (!this.includeExcluded) {
+    async addExcludedFoldersToQueue() {
+        try {
+            // Получаем список всех папок в текущей директории
+            const response = await fetch(`/api/folder?path=${encodeURIComponent(this.currentPath)}`);
+            const data = await response.json();
+            
             const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
-            const pathLower = path.toLowerCase();
-            for (const excludedName of excludedNames) {
-                if (pathLower.includes(excludedName)) {
-                    this.showNotification(`Папки с названием "${excludedName}" не обрабатываются`, 'error');
-                    return;
+            const excludedFolders = [];
+            
+            // Находим все папки с исключаемыми названиями
+            for (const item of data.items) {
+                if (item.type === 'folder') {
+                    const folderName = item.name.replace('📂 ', '');
+                    const folderNameLower = folderName.toLowerCase();
+                    
+                    for (const excludedName of excludedNames) {
+                        if (folderNameLower.includes(excludedName)) {
+                            excludedFolders.push(item.path);
+                            break;
+                        }
+                    }
                 }
             }
+            
+            // Добавляем найденные папки в очередь
+            for (const folderPath of excludedFolders) {
+                await this.addToQueueDirect(folderPath);
+            }
+            
+            if (excludedFolders.length > 0) {
+                this.showNotification(`Добавлено ${excludedFolders.length} папок "Общие" в очередь`, 'success');
+                await this.loadQueue();
+            } else {
+                this.showNotification('Папки "Общие" не найдены в текущей директории', 'info');
+            }
+        } catch (error) {
+            this.showNotification('Ошибка поиска папок "Общие": ' + error.message, 'error');
         }
-        
+    }
+
+    async addToQueueDirect(path) {
         try {
             const response = await fetch('/api/queue/add', {
                 method: 'POST',
@@ -410,11 +444,32 @@ class PhotoClusterApp {
                 throw new Error(result.detail || result.message);
             }
             
-            this.showNotification(result.message, 'success');
-            await this.loadQueue();
-
+            return result;
         } catch (error) {
             this.showNotification('Ошибка добавления в очередь: ' + error.message, 'error');
+            throw error;
+        }
+    }
+
+    async addToQueue(path) {
+        // Если не включена обработка исключенных папок, проверяем их
+        if (!this.includeExcluded) {
+            const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
+            const pathLower = path.toLowerCase();
+            for (const excludedName of excludedNames) {
+                if (pathLower.includes(excludedName)) {
+                    this.showNotification(`Папки с названием "${excludedName}" не обрабатываются`, 'error');
+                    return;
+                }
+            }
+        }
+        
+        try {
+            const result = await this.addToQueueDirect(path);
+            this.showNotification(result.message, 'success');
+            await this.loadQueue();
+        } catch (error) {
+            // Ошибка уже обработана в addToQueueDirect
         }
     }
 
