@@ -151,6 +151,8 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
     """Фоновая задача обработки папки"""
     try:
         print(f"🔍 process_folder_task запущена: {folder_path}, include_excluded={include_excluded}")
+        import sys
+        sys.stdout.flush()
         
         app_state["current_tasks"][task_id]["status"] = "running"
         app_state["current_tasks"][task_id]["message"] = "Начинаем обработку..."

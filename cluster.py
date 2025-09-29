@@ -322,23 +322,34 @@ def find_common_folders_recursive(root_dir: Path):
     excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
     common_folders = []
     
-    def scan_directory(dir_path):
+    print(f"🔍 Начинаем поиск папок 'общие' в: {root_dir}")
+    print(f"🔍 Ищем папки с именами: {excluded_names}")
+    
+    def scan_directory(dir_path, level=0):
+        indent = "  " * level
         try:
+            print(f"{indent}📁 Сканируем: {dir_path}")
             for item in dir_path.iterdir():
                 if item.is_dir():
+                    print(f"{indent}  🔍 Проверяем папку: {item.name}")
                     # Проверяем, является ли эта папка "общей"
-                    if any(ex in item.name.lower() for ex in excluded_names):
-                        common_folders.append(item)
-                        print(f"🔍 Найдена папка 'общие': {item}")
+                    item_name_lower = item.name.lower()
+                    for ex in excluded_names:
+                        if ex in item_name_lower:
+                            common_folders.append(item)
+                            print(f"{indent}  ✅ Найдена папка 'общие': {item}")
+                            break
                     else:
-                        # Рекурсивно сканируем подпапки
-                        scan_directory(item)
+                        # Рекурсивно сканируем подпапки (только до уровня 3)
+                        if level < 3:
+                            scan_directory(item, level + 1)
         except PermissionError:
-            print(f"❌ Нет доступа к папке: {dir_path}")
+            print(f"{indent}❌ Нет доступа к папке: {dir_path}")
         except Exception as e:
-            print(f"❌ Ошибка сканирования {dir_path}: {e}")
+            print(f"{indent}❌ Ошибка сканирования {dir_path}: {e}")
     
     scan_directory(root_dir)
+    print(f"🔍 Поиск завершен. Найдено {len(common_folders)} папок 'общие': {[str(f) for f in common_folders]}")
     return common_folders
 
 
@@ -426,6 +437,21 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
             if progress_callback:
                 progress_callback("❌ Папки 'общие' не найдены во всей иерархии", 100)
             print(f"❌ Папки 'общие' не найдены в {group_dir}")
+            print(f"🔍 Проверили следующие папки:")
+            
+            def debug_scan_directory(dir_path, level=0):
+                indent = "  " * level
+                try:
+                    print(f"{indent}📁 {dir_path}")
+                    for item in dir_path.iterdir():
+                        if item.is_dir():
+                            print(f"{indent}  └── 📁 {item.name}")
+                            if level < 2:  # Ограничиваем глубину
+                                debug_scan_directory(item, level + 1)
+                except Exception as e:
+                    print(f"{indent}  ❌ Ошибка: {e}")
+            
+            debug_scan_directory(group_dir)
             return 0, 0, cluster_counter
         
         print(f"🔍 Найдено {len(common_folders)} папок 'общие'")
