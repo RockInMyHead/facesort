@@ -150,6 +150,8 @@ def get_folder_contents(path: Path) -> List[FolderInfo]:
 async def process_folder_task(task_id: str, folder_path: str, include_excluded: bool = False):
     """Фоновая задача обработки папки"""
     try:
+        print(f"🔍 process_folder_task запущена: {folder_path}, include_excluded={include_excluded}")
+        
         app_state["current_tasks"][task_id]["status"] = "running"
         app_state["current_tasks"][task_id]["message"] = "Начинаем обработку..."
         app_state["current_tasks"][task_id]["progress"] = 5
@@ -207,7 +209,7 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
             app_state["current_tasks"][task_id]["message"] = "Групповая обработка папок..."
             app_state["current_tasks"][task_id]["progress"] = 10
             
-            process_group_folder(path, progress_callback=group_progress_callback)
+            process_group_folder(path, progress_callback=group_progress_callback, include_excluded=include_excluded)
             result = ProcessingResult(
                 moved=0, copied=0, clusters_count=0,
                 unreadable_count=0, no_faces_count=0,

@@ -320,6 +320,9 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
     Иначе - обрабатываем каждую подпапку отдельно.
     """
     cluster_counter = 1
+    
+    print(f"🔍 process_group_folder вызвана для: {group_dir}, include_excluded={include_excluded}")
+    
     if include_excluded:
         # Копируем фото из общей папки в существующие папки людей
         excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
@@ -344,7 +347,7 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
             progress_callback("🔄 Анализ общих фотографий для копирования", 20)
         
         # Кластеризуем ТОЛЬКО общие фото с учетом всех фото для определения кластеров
-        data = build_plan_live(common_dir, include_excluded=False, progress_callback=progress_callback)
+        data = build_plan_live(common_dir, include_excluded=True, progress_callback=progress_callback)
         clusters = data.get('clusters', {})
         plan = data.get('plan', [])
         
@@ -372,6 +375,8 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
         
         if progress_callback:
             progress_callback(f"✅ Копировано общих фото: {copied}", 100)
+        
+        print(f"✅ Обработка общих фото завершена: скопировано {copied} файлов")
         return 0, copied, cluster_counter
     # Обрабатываем каждую подпапку, исключая папки 'общие'
     subfolders = [f for f in sorted(group_dir.iterdir()) if f.is_dir() and "общие" not in f.name.lower()]
