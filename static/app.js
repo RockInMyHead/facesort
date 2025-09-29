@@ -572,3 +572,98 @@ class PhotoClusterApp {
             if (task.status === 'running' || task.status === 'pending') {
                 const progress = task.progress || 0;
                 progressHtml = `
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%"></div>
+                    </div>
+                    <div class="progress-text">${progress}%</div>
+                    <div class="progress-details">${task.message || 'Подготовка...'}</div>
+                `;
+            }
+
+            taskEl.innerHTML = `
+                <div class="task-header">
+                    <span>${statusEmoji[task.status]} ${task.path}</span>
+                    <button class="task-close" data-task-id="${task.id}">×</button>
+                </div>
+                ${progressHtml}
+                ${resultHtml}
+            `;
+            this.tasksList.appendChild(taskEl);
+        });
+    }
+
+    async startTaskPolling() {
+        setInterval(async () => {
+            await this.loadTasks();
+        }, 1000); // Проверять каждую секунду
+    }
+
+    async clearCompletedTasks() {
+        try {
+            const response = await fetch('/api/tasks/clear', {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+            this.showNotification(result.message, 'success');
+            await this.loadTasks();
+        } catch (error) {
+            this.showNotification('Ошибка очистки завершенных задач: ' + error.message, 'error');
+        }
+    }
+
+    async moveItem(srcPath, destPath) {
+        try {
+            const response = await fetch(`/api/move?srcPath=${encodeURIComponent(srcPath)}&destPath=${encodeURIComponent(destPath)}`, {
+                method: 'POST'
+            });
+            const result = await response.json();
+            this.showNotification(result.message, 'success');
+            await this.loadQueue(); // Обновляем очередь после перемещения
+        } catch (error) {
+            this.showNotification('Ошибка перемещения файла: ' + error.message, 'error');
+        }
+    }
+
+    async deleteItem(path) {
+        if (!confirm('Вы уверены, что хотите удалить этот файл/папку?')) {
+            return;
+        }
+        try {
+            const response = await fetch(`/api/delete?path=${encodeURIComponent(path)}`, {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+            this.showNotification(result.message, 'success');
+            await this.loadQueue(); // Обновляем очередь после удаления
+        } catch (error) {
+            this.showNotification('Ошибка удаления файла/папки: ' + error.message, 'error');
+        }
+    }
+
+    async showNotification(message, type) {
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.remove();
+        }, 3000);
+    }
+
+    async loadQueue() {
+        try {
+            const response = await fetch('/api/queue');
+            const data = await response.json();
+            this.queue = data.queue;
+            this.displayQueue();
+        } catch (error) {
+            console.error('Ошибка загрузки очереди:', error);
+        }
+    }
+}
+
+// Initialize the app
+document.addEventListener('DOMContentLoaded', () => {
+    const app = new PhotoClusterApp();
+});
