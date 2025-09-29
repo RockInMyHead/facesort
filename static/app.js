@@ -72,11 +72,15 @@ class PhotoClusterApp {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
             
+            console.log(`🔍 Кнопка "Общие" нажата. includeExcluded = ${this.includeExcluded}`);
+            
             if (this.includeExcluded) {
                 // Ждем добавления папок 'Общие' в очередь
+                console.log('🔍 Добавляем исключенные папки в очередь...');
                 await this.addExcludedFoldersToQueue();
             }
             // Запускаем обработку очереди с учётом включенных 'общих' папок
+            console.log(`🔍 Запускаем processQueue с includeExcluded = ${this.includeExcluded}`);
             await this.processQueue();
         });
         // Кнопка добавить в очередь
@@ -532,6 +536,7 @@ class PhotoClusterApp {
             }
 
             const url = `/api/process?includeExcluded=${this.includeExcluded}`;
+            console.log(`🔍 Отправляем запрос: ${url}`);
             const response = await fetch(url, { method: 'POST' });
             const result = await response.json();
             if (!response.ok) {
