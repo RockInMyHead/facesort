@@ -412,9 +412,9 @@ class PhotoClusterApp {
                 }
             }
             
-            // Добавляем найденные папки в очередь
+            // Добавляем найденные папки в очередь с флагом includeExcluded
             for (const folderPath of excludedFolders) {
-                await this.addToQueueDirect(folderPath);
+                await this.addToQueueDirect(folderPath, true);
             }
             
             if (excludedFolders.length > 0) {
@@ -428,9 +428,10 @@ class PhotoClusterApp {
         }
     }
 
-    async addToQueueDirect(path) {
+    async addToQueueDirect(path, includeExcluded = false) {
         try {
-            const response = await fetch('/api/queue/add', {
+            const url = includeExcluded ? '/api/queue/add?includeExcluded=true' : '/api/queue/add';
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

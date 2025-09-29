@@ -114,15 +114,25 @@ def build_plan_live(
     min_samples: int = 2,
     providers: List[str] = ("CPUExecutionProvider",),
     progress_callback=None,
+    include_excluded: bool = False,
 ):
     input_dir = Path(input_dir)
-    # Собираем все изображения, исключая те, что находятся в папках с нежелательными именами
+    # Собираем все изображения, учитываем флаг include_excluded
     excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
-    all_images = [
-        p for p in input_dir.rglob("*")
-        if is_image(p)
-        and not any(ex in str(p).lower() for ex in excluded_names)
-    ]
+    
+    if include_excluded:
+        # Включаем все изображения, даже из папок "общие"
+        all_images = [
+            p for p in input_dir.rglob("*")
+            if is_image(p)
+        ]
+    else:
+        # Исключаем изображения из папок с нежелательными именами
+        all_images = [
+            p for p in input_dir.rglob("*")
+            if is_image(p)
+            and not any(ex in str(p).lower() for ex in excluded_names)
+        ]
 
     if progress_callback:
         progress_callback(f"📂 Сканируется: {input_dir}, найдено изображений: {len(all_images)}", 1)
@@ -311,34 +321,54 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
     """
     cluster_counter = 1
     if include_excluded:
-        # Копируем фото из общей папки в папку каждого человека, изображенного на фото
+        # Копируем фото из общей папки в существующие папки людей
         excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+        
         # Находим папку 'общие'
         common_dirs = [d for d in group_dir.iterdir() if d.is_dir() and any(ex in d.name.lower() for ex in excluded_names)]
         if not common_dirs:
+            if progress_callback:
+                progress_callback("❌ Папка 'общие' не найдена", 100)
             return 0, 0, cluster_counter
+        
         common_dir = common_dirs[0]
+        
+        # Находим существующие папки людей (папки с номерами кластеров)
+        person_dirs = [d for d in group_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+        if not person_dirs:
+            if progress_callback:
+                progress_callback("❌ Папки людей не найдены. Сначала обработайте основные папки", 100)
+            return 0, 0, cluster_counter
+        
         if progress_callback:
-            progress_callback("🔄 Анализ общих фотографий", 20)
+            progress_callback("🔄 Анализ общих фотографий для копирования", 20)
+        
+        # Кластеризуем только общие фото с учетом всех фото
         data = build_plan_live(group_dir, include_excluded=True, progress_callback=progress_callback)
         clusters = data.get('clusters', {})
+        plan = data.get('plan', [])
+        
         copied = 0
-        # Определяем папки людей по кластерам
-        for label, paths in clusters.items():
-            # ищем папки людей, исключая общую
-            person_dirs = set(Path(p).parent for p in paths if not str(Path(p).parent).startswith(str(common_dir)))
-            # копируем общие фото
-            for p in paths:
-                p_path = Path(p)
-                if p_path.parent == common_dir:
-                    for person_dir in person_dirs:
-                        dst = person_dir / p_path.name
-                        dst.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Для каждого файла из общей папки копируем в папки кластеров
+        for item in plan:
+            item_path = Path(item['path'])
+            # Проверяем, что файл из общей папки
+            if item_path.parent == common_dir:
+                clusters_for_file = item['cluster']
+                for cluster_id in clusters_for_file:
+                    # Ищем соответствующую папку человека
+                    target_dir = group_dir / str(cluster_id)
+                    if target_dir.exists():
+                        dst = target_dir / item_path.name
                         try:
-                            shutil.copy2(str(p_path), str(dst))
+                            shutil.copy2(str(item_path), str(dst))
                             copied += 1
-                        except Exception:
-                            pass
+                            if progress_callback:
+                                progress_callback(f"📋 Копирую {item_path.name} в кластер {cluster_id}", 80)
+                        except Exception as e:
+                            print(f"❌ Ошибка копирования {item_path} → {dst}: {e}")
+        
         if progress_callback:
             progress_callback(f"✅ Копировано общих фото: {copied}", 100)
         return 0, copied, cluster_counter
