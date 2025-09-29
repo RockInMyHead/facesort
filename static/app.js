@@ -459,6 +459,8 @@ class PhotoClusterApp {
     }
 
     async addToQueue(path) {
+        // Сохраняем корневую директорию для обработки
+        this.initialPath = path;
         // Если не включена обработка исключенных папок, проверяем их
         if (!this.includeExcluded) {
             const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
