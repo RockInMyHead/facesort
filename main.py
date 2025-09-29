@@ -504,11 +504,20 @@ async def move_item(srcPath: str = Query(...), destPath: str = Query(...)):
     dest_path = Path(destPath)
     if not src_path.exists():
         raise HTTPException(status_code=404, detail="Источник не найден")
-    if not dest_path.exists():
-        raise HTTPException(status_code=404, detail="Назначение не найдено")
     
-    target = dest_path / src_path.name
+    # Если destination - папка, добавляем имя файла
+    if dest_path.is_dir():
+        target = dest_path / src_path.name
+    elif dest_path.exists():
+        # Если destination - файл, используем родительскую папку
+        target = dest_path.parent / src_path.name
+    else:
+        # Если destination не существует, считаем что это папка
+        target = dest_path / src_path.name
+    
     try:
+        # Создаем папку назначения если её нет
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src_path), str(target))
         return {"message": "Успешно перемещено", "src": str(src_path), "dest": str(target)}
     except Exception as e:
