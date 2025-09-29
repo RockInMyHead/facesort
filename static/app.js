@@ -524,6 +524,13 @@ class PhotoClusterApp {
             this.processBtn.disabled = true;
             this.processBtn.innerHTML = '<div class="loading"></div> Запуск...';
 
+            // Обновляем очередь перед запуском, чтобы избежать гонки состояний
+            await this.loadQueue();
+            if (!this.queue || this.queue.length === 0) {
+                this.showNotification('Очередь пуста. Добавьте папки перед запуском.', 'error');
+                return;
+            }
+
             const url = `/api/process?includeExcluded=${this.includeExcluded}`;
             const response = await fetch(url, { method: 'POST' });
             const result = await response.json();
