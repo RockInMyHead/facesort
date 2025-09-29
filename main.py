@@ -147,7 +147,7 @@ def get_folder_contents(path: Path) -> List[FolderInfo]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при чтении папки: {str(e)}")
 
-async def process_folder_task(task_id: str, folder_path: str):
+async def process_folder_task(task_id: str, folder_path: str, include_excluded: bool = False):
     """Фоновая задача обработки папки"""
     try:
         app_state["current_tasks"][task_id]["status"] = "running"
@@ -375,7 +375,7 @@ async def clear_queue():
     return {"message": "Очередь очищена"}
 
 @app.post("/api/process")
-async def process_queue(background_tasks: BackgroundTasks):
+async def process_queue(background_tasks: BackgroundTasks, includeExcluded: bool = False):
     """Запустить обработку очереди"""
     if not app_state["queue"]:
         raise HTTPException(status_code=400, detail="Очередь пуста")
@@ -390,10 +390,10 @@ async def process_queue(background_tasks: BackgroundTasks):
             "progress": 0,
             "message": "В очереди...",
             "folder_path": folder_path,
-            "created_at": time.time()
+            "created_at": time.time(),
+            "include_excluded": includeExcluded
         }
-        
-        background_tasks.add_task(process_folder_task, task_id, folder_path)
+        background_tasks.add_task(process_folder_task, task_id, folder_path, includeExcluded)
         task_ids.append(task_id)
     
     app_state["queue"].clear()

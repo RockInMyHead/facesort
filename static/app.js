@@ -19,6 +19,8 @@ class PhotoClusterApp {
         this.queueList = document.getElementById('queueList');
         this.processBtn = document.getElementById('processBtn');
         this.clearBtn = document.getElementById('clearBtn');
+        this.includeExcludedBtn = document.getElementById('includeExcludedBtn');
+        this.includeExcluded = false;
         this.addQueueBtn = document.getElementById('addQueueBtn');
         this.tasksList = document.getElementById('tasksList');
         this.clearTasksBtn = document.getElementById('clearTasksBtn');
@@ -64,6 +66,10 @@ class PhotoClusterApp {
         // Кнопки обработки очереди
         this.processBtn.addEventListener('click', () => this.processQueue());
         this.clearBtn.addEventListener('click', () => this.clearQueue());
+        this.includeExcludedBtn.addEventListener('click', () => {
+            this.includeExcluded = !this.includeExcluded;
+            this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
+        });
         // Кнопка добавить в очередь
         this.addQueueBtn.addEventListener('click', () => this.addToQueue(this.currentPath));
         // Кнопка очистки завершенных задач
@@ -451,9 +457,8 @@ class PhotoClusterApp {
             this.processBtn.disabled = true;
             this.processBtn.innerHTML = '<div class="loading"></div> Запуск...';
 
-            const response = await fetch('/api/process', {
-                method: 'POST'
-            });
+            const url = `/api/process?includeExcluded=${this.includeExcluded}`;
+            const response = await fetch(url, { method: 'POST' });
 
             const result = await response.json();
             this.showNotification(result.message, 'success');
@@ -567,114 +572,3 @@ class PhotoClusterApp {
             if (task.status === 'running' || task.status === 'pending') {
                 const progress = task.progress || 0;
                 progressHtml = `
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: ${progress}%"></div>
-                    </div>
-                    <div class="progress-text">${progress}%</div>
-                    <div class="progress-details">${task.message || 'Подготовка...'}</div>
-                `;
-            }
-
-            taskEl.innerHTML = `
-                <div class="task-header">
-                    <strong>${task.folder_path}</strong>
-                    <span class="task-status">${statusEmoji[task.status]} ${task.status}</span>
-                </div>
-                ${progressHtml}
-                <div class="task-message">${task.message}</div>
-                ${resultHtml}
-            `;
-
-            this.tasksList.appendChild(taskEl);
-        });
-    }
-
-    startTaskPolling() {
-        // Stream task updates via Server-Sent Events
-        if (this.eventSource) {
-            this.eventSource.close();
-        }
-        this.eventSource = new EventSource('/api/stream/tasks');
-        this.eventSource.onmessage = (e) => {
-            try {
-                const data = JSON.parse(e.data);
-                this.displayTasks(data.tasks);
-            } catch (err) {
-                console.error('Error parsing SSE data:', err);
-            }
-        };
-        this.eventSource.onerror = (err) => {
-            console.error('SSE connection error:', err);
-            // Optionally retry or fallback
-        };
-    }
-
-    showNotification(message, type = 'success') {
-        // Удаляем предыдущие уведомления
-        const existing = document.querySelector('.notification');
-        if (existing) {
-            existing.remove();
-        }
-
-        const notification = document.createElement('div');
-        notification.className = `notification ${type}`;
-        notification.textContent = message;
-        
-        document.body.appendChild(notification);
-        
-        // Показываем уведомление
-        setTimeout(() => {
-            notification.classList.add('show');
-        }, 100);
-        
-        // Скрываем через 4 секунды
-        setTimeout(() => {
-            notification.classList.remove('show');
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 300);
-        }, 4000);
-    }
-
-    async moveItem(src, dest) {
-        try {
-            const response = await fetch('/api/move', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ src: src, dest: dest })
-            });
-            const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.detail || 'Unknown error');
-            }
-            this.showNotification(`Перемещено: ${result.src} → ${result.dest}`, 'success');
-            // Обновляем текущее содержимое папки
-            this.navigateToFolder(this.currentPath);
-        } catch (error) {
-            this.showNotification('Ошибка перемещения: ' + error.message, 'error');
-        }
-    }
-
-    async clearCompletedTasks() {
-        try {
-            // Очищаем завершенные задачи на сервере
-            const response = await fetch('/api/tasks/clear', {
-                method: 'POST'
-            });
-            if (response.ok) {
-                this.showNotification('Завершенные задачи очищены', 'success');
-                // Обновляем список задач
-                await this.loadTasks();
-            }
-        } catch (error) {
-            this.showNotification('Ошибка очистки задач: ' + error.message, 'error');
-        }
-    }
-}
-
-// Инициализация приложения
-document.addEventListener('DOMContentLoaded', () => {
-    new PhotoClusterApp();
-});
