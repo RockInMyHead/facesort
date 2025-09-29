@@ -317,10 +317,88 @@ def distribute_to_folders(plan: dict, base_dir: Path, cluster_start: int = 1, pr
     print(f"📦 Перемещено: {moved}, скопировано: {copied}")
     return moved, copied, cluster_start + len(used_clusters)
 
+def find_common_folders_recursive(root_dir: Path):
+    """Рекурсивно найти все папки 'общие' в дереве каталогов"""
+    excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+    common_folders = []
+    
+    def scan_directory(dir_path):
+        try:
+            for item in dir_path.iterdir():
+                if item.is_dir():
+                    # Проверяем, является ли эта папка "общей"
+                    if any(ex in item.name.lower() for ex in excluded_names):
+                        common_folders.append(item)
+                        print(f"🔍 Найдена папка 'общие': {item}")
+                    else:
+                        # Рекурсивно сканируем подпапки
+                        scan_directory(item)
+        except PermissionError:
+            print(f"❌ Нет доступа к папке: {dir_path}")
+        except Exception as e:
+            print(f"❌ Ошибка сканирования {dir_path}: {e}")
+    
+    scan_directory(root_dir)
+    return common_folders
+
+
+def process_common_folder_at_level(common_dir: Path, progress_callback=None):
+    """Обработать одну папку 'общие' и скопировать фото в папки людей на том же уровне"""
+    parent_dir = common_dir.parent
+    
+    print(f"🔍 Обрабатываем папку 'общие': {common_dir}")
+    print(f"🔍 Ищем папки людей в: {parent_dir}")
+    
+    # Находим папки людей (с номерами кластеров) на том же уровне
+    person_dirs = [d for d in parent_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+    
+    if not person_dirs:
+        print(f"❌ Папки людей не найдены в {parent_dir}. Пропускаем.")
+        return 0
+    
+    print(f"🔍 Найдены папки людей: {[d.name for d in person_dirs]}")
+    
+    # Кластеризуем ТОЛЬКО фото из папки "общие"
+    data = build_plan_live(common_dir, include_excluded=True, progress_callback=progress_callback)
+    plan = data.get('plan', [])
+    
+    if not plan:
+        print(f"❌ Нет фото для обработки в {common_dir}")
+        return 0
+    
+    copied = 0
+    
+    # Для каждого файла из общей папки копируем в папки кластеров
+    for item in plan:
+        item_path = Path(item['path'])
+        clusters_for_file = item['cluster']
+        
+        for cluster_id in clusters_for_file:
+            # Ищем соответствующую папку человека на том же уровне
+            target_dir = parent_dir / str(cluster_id)
+            if target_dir.exists():
+                dst = target_dir / item_path.name
+                
+                # Проверяем, что файл не копируется сам в себя
+                if item_path.resolve() != dst.resolve():
+                    try:
+                        shutil.copy2(str(item_path), str(dst))
+                        copied += 1
+                        print(f"📋 Скопировано: {item_path.name} → {target_dir.name}")
+                        if progress_callback:
+                            progress_callback(f"📋 Копирую {item_path.name} в кластер {cluster_id}", 80)
+                    except Exception as e:
+                        print(f"❌ Ошибка копирования {item_path} → {dst}: {e}")
+                else:
+                    print(f"⚠️ Пропускаем копирование файла в себя: {item_path}")
+    
+    print(f"✅ Папка {common_dir.name}: скопировано {copied} файлов")
+    return copied
+
+
 def process_group_folder(group_dir: Path, progress_callback=None, include_excluded: bool = False):
     """
-    Если include_excluded=True, выполняем общую кластеризацию всего каталога,
-    копируем фото из папки "общие" в папки соответствующих людей.
+    Если include_excluded=True, рекурсивно ищем все папки "общие" и копируем фото в папки людей.
     Иначе - обрабатываем каждую подпапку отдельно.
     """
     cluster_counter = 1
@@ -330,61 +408,37 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
     print(f"🔍 process_group_folder [{call_id}] вызвана для: {group_dir}, include_excluded={include_excluded}")
     
     if include_excluded:
-        # Копируем фото из общей папки в существующие папки людей
-        excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+        # Рекурсивно находим все папки "общие"
+        if progress_callback:
+            progress_callback("🔍 Поиск папок 'общие' во всей иерархии...", 10)
         
-        # Находим папку 'общие'
-        common_dirs = [d for d in group_dir.iterdir() if d.is_dir() and any(ex in d.name.lower() for ex in excluded_names)]
-        if not common_dirs:
+        common_folders = find_common_folders_recursive(group_dir)
+        
+        if not common_folders:
             if progress_callback:
-                progress_callback("❌ Папка 'общие' не найдена", 100)
+                progress_callback("❌ Папки 'общие' не найдены во всей иерархии", 100)
+            print(f"❌ Папки 'общие' не найдены в {group_dir}")
             return 0, 0, cluster_counter
         
-        common_dir = common_dirs[0]
+        print(f"🔍 Найдено {len(common_folders)} папок 'общие'")
         
-        # Находим существующие папки людей (папки с номерами кластеров)
-        person_dirs = [d for d in group_dir.iterdir() if d.is_dir() and d.name.isdigit()]
-        if not person_dirs:
+        total_copied = 0
+        total_folders = len(common_folders)
+        
+        # Обрабатываем каждую найденную папку "общие"
+        for i, common_folder in enumerate(common_folders):
             if progress_callback:
-                progress_callback("❌ Папки людей не найдены. Сначала обработайте основные папки", 100)
-            return 0, 0, cluster_counter
+                percent = 20 + int((i + 1) / total_folders * 70)
+                progress_callback(f"📋 Обрабатываем папку: {common_folder.name} ({i+1}/{total_folders})", percent)
+            
+            copied = process_common_folder_at_level(common_folder, progress_callback)
+            total_copied += copied
         
         if progress_callback:
-            progress_callback("🔄 Анализ общих фотографий для копирования", 20)
+            progress_callback(f"✅ Всего скопировано: {total_copied} файлов", 100)
         
-        # Кластеризуем ТОЛЬКО общие фото с учетом всех фото для определения кластеров
-        print(f"🔍 Вызываем build_plan_live для common_dir: {common_dir}")
-        data = build_plan_live(common_dir, include_excluded=True, progress_callback=progress_callback)
-        clusters = data.get('clusters', {})
-        plan = data.get('plan', [])
-        
-        copied = 0
-        
-        if progress_callback:
-            progress_callback(f"🔍 Найдено общих фото: {len(plan)}", 50)
-        
-        # Для каждого файла из общей папки копируем в папки кластеров
-        for item in plan:
-            item_path = Path(item['path'])
-            clusters_for_file = item['cluster']
-            for cluster_id in clusters_for_file:
-                # Ищем соответствующую папку человека
-                target_dir = group_dir / str(cluster_id)
-                if target_dir.exists():
-                    dst = target_dir / item_path.name
-                    try:
-                        shutil.copy2(str(item_path), str(dst))
-                        copied += 1
-                        if progress_callback:
-                            progress_callback(f"📋 Копирую {item_path.name} в кластер {cluster_id}", 80)
-                    except Exception as e:
-                        print(f"❌ Ошибка копирования {item_path} → {dst}: {e}")
-        
-        if progress_callback:
-            progress_callback(f"✅ Копировано общих фото: {copied}", 100)
-        
-        print(f"✅ Обработка общих фото [{call_id}] завершена: скопировано {copied} файлов")
-        return 0, copied, cluster_counter
+        print(f"✅ Обработка общих фото [{call_id}] завершена: скопировано {total_copied} файлов из {len(common_folders)} папок")
+        return 0, total_copied, cluster_counter
     # Обрабатываем каждую подпапку, исключая папки 'общие'
     subfolders = [f for f in sorted(group_dir.iterdir()) if f.is_dir() and "общие" not in f.name.lower()]
     total_subfolders = len(subfolders)
