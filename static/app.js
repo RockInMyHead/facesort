@@ -116,7 +116,7 @@ class PhotoClusterApp {
 
     async loadDrives() {
         try {
-            const response = await fetch('/api/drives');
+            const response = await fetch('/api/drives', { cache: 'no-store' });
             const drives = await response.json();
             
             this.driveButtons.innerHTML = '';
@@ -139,7 +139,7 @@ class PhotoClusterApp {
             if (!this.initialPath) {
                 this.initialPath = path;
             }
-            const response = await fetch(`/api/folder?path=${encodeURIComponent(path)}`);
+            const response = await fetch(`/api/folder?path=${encodeURIComponent(path)}&_ts=${Date.now()}`, { cache: 'no-store' });
             
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -186,7 +186,7 @@ class PhotoClusterApp {
                 // Папка: если есть изображения, показываем превью, иначе кнопка
                 let imgs = [];
                 try {
-                    const res = await fetch(`/api/folder?path=${encodeURIComponent(item.path)}`);
+                    const res = await fetch(`/api/folder?path=${encodeURIComponent(item.path)}&_ts=${Date.now()}`, { cache: 'no-store' });
                     const folderData = await res.json();
                     imgs = folderData.contents.filter(c => !c.is_directory);
                 } catch {}
@@ -218,7 +218,7 @@ class PhotoClusterApp {
                     });
                     
                     const img = document.createElement('img');
-                    img.src = `/api/image/preview?path=${encodeURIComponent(imgs[0].path)}&size=150`;
+                    img.src = `/api/image/preview?path=${encodeURIComponent(imgs[0].path)}&size=150&_ts=${Date.now()}`;
                     img.alt = item.name.replace('📂 ', '');
                     div.appendChild(img);
                     
@@ -311,7 +311,7 @@ class PhotoClusterApp {
                 });
                 
                 const img = document.createElement('img');
-                img.src = `/api/image/preview?path=${encodeURIComponent(item.path)}&size=150`;
+                img.src = `/api/image/preview?path=${encodeURIComponent(item.path)}&size=150&_ts=${Date.now()}`;
                 img.alt = item.name.replace('🖼 ', '');
                 div.appendChild(img);
                 
@@ -363,7 +363,8 @@ class PhotoClusterApp {
         try {
             const response = await fetch(`/api/upload?path=${encodeURIComponent(this.currentPath)}`, {
                 method: 'POST',
-                body: formData
+                body: formData,
+                cache: 'no-store'
             });
 
             const result = await response.json();
@@ -401,7 +402,7 @@ class PhotoClusterApp {
         try {
             // Используем initialPath для поиска общих папок
             const rootPath = this.initialPath || this.currentPath;
-            const response = await fetch(`/api/folder?path=${encodeURIComponent(rootPath)}`);
+            const response = await fetch(`/api/folder?path=${encodeURIComponent(rootPath)}&_ts=${Date.now()}`, { cache: 'no-store' });
             const data = await response.json();
             
             const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
@@ -488,7 +489,7 @@ class PhotoClusterApp {
 
     async loadQueue() {
         try {
-            const response = await fetch('/api/queue');
+            const response = await fetch('/api/queue', { cache: 'no-store' });
             const data = await response.json();
             this.queue = data.queue;
             this.displayQueue();
@@ -537,7 +538,7 @@ class PhotoClusterApp {
 
             const url = `/api/process?includeExcluded=${this.includeExcluded}`;
             console.log(`🔍 Отправляем запрос: ${url}`);
-            const response = await fetch(url, { method: 'POST' });
+            const response = await fetch(url, { method: 'POST', cache: 'no-store' });
             const result = await response.json();
             if (!response.ok) {
                 // Показать текст ошибки из detail
@@ -559,7 +560,8 @@ class PhotoClusterApp {
     async clearQueue() {
         try {
             const response = await fetch('/api/queue', {
-                method: 'DELETE'
+                method: 'DELETE',
+                cache: 'no-store'
             });
 
             const result = await response.json();
@@ -573,7 +575,7 @@ class PhotoClusterApp {
 
     async loadTasks() {
         try {
-            const response = await fetch('/api/tasks');
+            const response = await fetch('/api/tasks', { cache: 'no-store' });
             const data = await response.json();
             
             // Обновляем только если есть изменения
@@ -684,7 +686,8 @@ class PhotoClusterApp {
     async clearCompletedTasks() {
         try {
             const response = await fetch('/api/tasks/clear', {
-                method: 'DELETE'
+                method: 'DELETE',
+                cache: 'no-store'
             });
             const result = await response.json();
             this.showNotification(result.message, 'success');
@@ -697,7 +700,8 @@ class PhotoClusterApp {
     async moveItem(srcPath, destPath) {
         try {
             const response = await fetch(`/api/move?srcPath=${encodeURIComponent(srcPath)}&destPath=${encodeURIComponent(destPath)}`, {
-                method: 'POST'
+                method: 'POST',
+                cache: 'no-store'
             });
             const result = await response.json();
             this.showNotification(result.message, 'success');
@@ -713,7 +717,8 @@ class PhotoClusterApp {
         }
         try {
             const response = await fetch(`/api/delete?path=${encodeURIComponent(path)}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                cache: 'no-store'
             });
             const result = await response.json();
             this.showNotification(result.message, 'success');
@@ -736,7 +741,7 @@ class PhotoClusterApp {
 
     async loadQueue() {
         try {
-            const response = await fetch('/api/queue');
+            const response = await fetch('/api/queue', { cache: 'no-store' });
             const data = await response.json();
             this.queue = data.queue;
             this.displayQueue();
