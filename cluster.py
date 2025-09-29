@@ -110,8 +110,8 @@ def build_plan_live(
     input_dir: Path,
     det_size=(640, 640),
     min_score: float = 0.7,
-    min_cluster_size: int = 2,
-    min_samples: int = 1,
+    min_cluster_size: int = 3,
+    min_samples: int = 2,
     providers: List[str] = ("CPUExecutionProvider",),
     progress_callback=None,
 ):
@@ -202,16 +202,14 @@ def build_plan_live(
     model = hdbscan.HDBSCAN(metric='precomputed', min_cluster_size=min_cluster_size, min_samples=min_samples)
     raw_labels = model.fit_predict(distance_matrix)
 
-    cluster_map, cluster_by_img = merge_clusters_by_centroid(
-        embeddings=embeddings,
-        owners=owners,
-        raw_labels=raw_labels,
-        auto_threshold=True,
-        margin=0.05,
-        min_threshold=0.2,
-        max_threshold=0.4,
-        progress_callback=progress_callback
-    )
+    # Прямое назначение без merge_clusters_by_centroid для строгой сегрегации
+    cluster_map = defaultdict(set)
+    cluster_by_img = defaultdict(set)
+    for label, path in zip(raw_labels, owners):
+        if label == -1:
+            continue
+        cluster_map[label].add(path)
+        cluster_by_img[path].add(label)
 
     # Этап 3: Формирование плана распределения
     if progress_callback:
