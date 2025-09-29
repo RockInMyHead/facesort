@@ -69,6 +69,8 @@ class PhotoClusterApp {
         this.includeExcludedBtn.addEventListener('click', () => {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
+            // Запускаем обработку очереди с учётом включенных 'общих' папок
+            this.processQueue();
         });
         // Кнопка добавить в очередь
         this.addQueueBtn.addEventListener('click', () => this.addToQueue(this.currentPath));
@@ -381,14 +383,15 @@ class PhotoClusterApp {
     }
 
     async addToQueue(path) {
-        // Проверяем, что папка не содержит исключаемые названия
-        const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
-        const pathLower = path.toLowerCase();
-        
-        for (const excludedName of excludedNames) {
-            if (pathLower.includes(excludedName)) {
-                this.showNotification(`Папки с названием "${excludedName}" не обрабатываются`, 'error');
-                return;
+        // Если не включена обработка исключенных папок, проверяем их
+        if (!this.includeExcluded) {
+            const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
+            const pathLower = path.toLowerCase();
+            for (const excludedName of excludedNames) {
+                if (pathLower.includes(excludedName)) {
+                    this.showNotification(`Папки с названием "${excludedName}" не обрабатываются`, 'error');
+                    return;
+                }
             }
         }
         
