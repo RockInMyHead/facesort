@@ -175,9 +175,11 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
         if not path.exists():
             raise Exception("Путь не существует")
         
+        # Определяем исключенные имена
+        excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+        
         # Если не включена обработка исключенных папок, проверяем их
         if not include_excluded:
-            excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
             folder_name_lower = str(path).lower()
             for excluded_name in excluded_names:
                 if excluded_name in folder_name_lower:
