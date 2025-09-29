@@ -116,9 +116,14 @@ def build_plan_live(
     progress_callback=None,
     include_excluded: bool = False,
 ):
-    input_dir = Path(input_dir)
-    # Собираем все изображения, учитываем флаг include_excluded
-    excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+    try:
+        input_dir = Path(input_dir)
+        # Собираем все изображения, учитываем флаг include_excluded
+        excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+        print(f"🔍 build_plan_live: переменная excluded_names определена: {excluded_names}")
+    except Exception as e:
+        print(f"❌ Ошибка в начале build_plan_live: {e}")
+        raise
     
     if include_excluded:
         # Включаем все изображения, даже из папок "общие"
