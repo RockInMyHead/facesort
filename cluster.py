@@ -343,34 +343,32 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
         if progress_callback:
             progress_callback("🔄 Анализ общих фотографий для копирования", 20)
         
-        # Кластеризуем только общие фото с учетом всех фото
-        data = build_plan_live(group_dir, include_excluded=True, progress_callback=progress_callback)
+        # Кластеризуем ТОЛЬКО общие фото с учетом всех фото для определения кластеров
+        data = build_plan_live(common_dir, include_excluded=False, progress_callback=progress_callback)
         clusters = data.get('clusters', {})
         plan = data.get('plan', [])
         
         copied = 0
         
+        if progress_callback:
+            progress_callback(f"🔍 Найдено общих фото: {len(plan)}", 50)
+        
         # Для каждого файла из общей папки копируем в папки кластеров
         for item in plan:
             item_path = Path(item['path'])
-            # Проверяем, что файл из общей папки (не из папок кластеров)
-            if (item_path.parent == common_dir or 
-                str(common_dir) in str(item_path.parent)):
-                clusters_for_file = item['cluster']
-                for cluster_id in clusters_for_file:
-                    # Ищем соответствующую папку человека
-                    target_dir = group_dir / str(cluster_id)
-                    if target_dir.exists():
-                        dst = target_dir / item_path.name
-                        # Проверяем, что не копируем файл сам в себя
-                        if str(item_path) != str(dst):
-                            try:
-                                shutil.copy2(str(item_path), str(dst))
-                                copied += 1
-                                if progress_callback:
-                                    progress_callback(f"📋 Копирую {item_path.name} в кластер {cluster_id}", 80)
-                            except Exception as e:
-                                print(f"❌ Ошибка копирования {item_path} → {dst}: {e}")
+            clusters_for_file = item['cluster']
+            for cluster_id in clusters_for_file:
+                # Ищем соответствующую папку человека
+                target_dir = group_dir / str(cluster_id)
+                if target_dir.exists():
+                    dst = target_dir / item_path.name
+                    try:
+                        shutil.copy2(str(item_path), str(dst))
+                        copied += 1
+                        if progress_callback:
+                            progress_callback(f"📋 Копирую {item_path.name} в кластер {cluster_id}", 80)
+                    except Exception as e:
+                        print(f"❌ Ошибка копирования {item_path} → {dst}: {e}")
         
         if progress_callback:
             progress_callback(f"✅ Копировано общих фото: {copied}", 100)
