@@ -66,17 +66,16 @@ class PhotoClusterApp {
         // Кнопки обработки очереди
         this.processBtn.addEventListener('click', () => this.processQueue());
         this.clearBtn.addEventListener('click', () => this.clearQueue());
-        this.includeExcludedBtn.addEventListener('click', () => {
+        this.includeExcludedBtn.addEventListener('click', async () => {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
             
             if (this.includeExcluded) {
-                // Если включили режим "Общие", автоматически добавляем все папки с исключаемыми названиями в очередь
-                this.addExcludedFoldersToQueue();
+                // Ждем добавления папок 'Общие' в очередь
+                await this.addExcludedFoldersToQueue();
             }
-            
             // Запускаем обработку очереди с учётом включенных 'общих' папок
-            this.processQueue();
+            await this.processQueue();
         });
         // Кнопка добавить в очередь
         this.addQueueBtn.addEventListener('click', () => this.addToQueue(this.currentPath));

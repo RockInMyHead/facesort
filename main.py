@@ -171,12 +171,13 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
         if not path.exists():
             raise Exception("Путь не существует")
         
-        # Проверяем, что папка не содержит исключаемые названия
-        excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
-        folder_name_lower = str(path).lower()
-        for excluded_name in excluded_names:
-            if excluded_name in folder_name_lower:
-                raise Exception(f"Папки с названием '{excluded_name}' не обрабатываются")
+        # Если не включена обработка исключенных папок, проверяем их
+        if not include_excluded:
+            excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+            folder_name_lower = str(path).lower()
+            for excluded_name in excluded_names:
+                if excluded_name in folder_name_lower:
+                    raise Exception(f"Папки с названием '{excluded_name}' не обрабатываются")
         
         # Определяем тип обработки - групповая только если есть подпапки с изображениями
         subdirs_with_images = []
