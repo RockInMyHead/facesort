@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -498,10 +498,10 @@ async def stream_tasks():
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.post("/api/move")
-async def move_item(item: MoveItem):
+async def move_item(srcPath: str = Query(...), destPath: str = Query(...)):
     """Переместить файл или папку"""
-    src_path = Path(item.src)
-    dest_path = Path(item.dest)
+    src_path = Path(srcPath)
+    dest_path = Path(destPath)
     if not src_path.exists():
         raise HTTPException(status_code=404, detail="Источник не найден")
     if not dest_path.exists():
