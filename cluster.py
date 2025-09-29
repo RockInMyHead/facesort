@@ -109,7 +109,7 @@ def merge_clusters_by_centroid(
 def build_plan_live(
     input_dir: Path,
     det_size=(640, 640),
-    min_score: float = 0.6,
+    min_score: float = 0.7,
     min_cluster_size: int = 2,
     min_samples: int = 1,
     providers: List[str] = ("CPUExecutionProvider",),
