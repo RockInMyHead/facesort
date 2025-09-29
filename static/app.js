@@ -1,6 +1,8 @@
 class PhotoClusterApp {
     constructor() {
         this.currentPath = '';
+        // Корневая папка для обработки очереди
+        this.initialPath = '';
         this.queue = [];
         this.lastTasksStr = '';
         
@@ -129,6 +131,10 @@ class PhotoClusterApp {
     async navigateToFolder(path) {
         try {
             this.currentPath = path;
+            // Сохраняем корневую директорию только один раз
+            if (!this.initialPath) {
+                this.initialPath = path;
+            }
             const response = await fetch(`/api/folder?path=${encodeURIComponent(path)}`);
             
             if (!response.ok) {
@@ -389,8 +395,9 @@ class PhotoClusterApp {
 
     async addExcludedFoldersToQueue() {
         try {
-            // Получаем список всех папок в текущей директории
-            const response = await fetch(`/api/folder?path=${encodeURIComponent(this.currentPath)}`);
+            // Используем initialPath для поиска общих папок
+            const rootPath = this.initialPath || this.currentPath;
+            const response = await fetch(`/api/folder?path=${encodeURIComponent(rootPath)}`);
             const data = await response.json();
             
             const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
