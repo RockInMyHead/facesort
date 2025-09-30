@@ -26,6 +26,7 @@ class PhotoClusterApp {
         this.addQueueBtn = document.getElementById('addQueueBtn');
         this.tasksList = document.getElementById('tasksList');
         this.clearTasksBtn = document.getElementById('clearTasksBtn');
+        this.zipBtn = document.getElementById('zipBtn');
         
         // Проверяем что все элементы найдены
         const elements = {
@@ -39,7 +40,8 @@ class PhotoClusterApp {
             clearBtn: this.clearBtn,
             addQueueBtn: this.addQueueBtn,
             tasksList: this.tasksList,
-            clearTasksBtn: this.clearTasksBtn
+            clearTasksBtn: this.clearTasksBtn,
+            zipBtn: this.zipBtn
         };
         
         for (const [name, element] of Object.entries(elements)) {
@@ -68,6 +70,7 @@ class PhotoClusterApp {
         // Кнопки обработки очереди
         this.processBtn.addEventListener('click', () => this.processQueue());
         this.clearBtn.addEventListener('click', () => this.clearQueue());
+        this.zipBtn.addEventListener('click', () => this.downloadZip());
         this.includeExcludedBtn.addEventListener('click', async () => {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
@@ -149,6 +152,9 @@ class PhotoClusterApp {
             
             this.currentPathEl.innerHTML = `<strong>Текущая папка:</strong> ${path}`;
             await this.displayFolderContents(data.contents);
+            
+            // Активируем кнопку ZIP когда выбрана папка
+            this.zipBtn.disabled = false;
             
         } catch (error) {
             this.showNotification('Ошибка доступа к папке: ' + error.message, 'error');
@@ -769,6 +775,51 @@ class PhotoClusterApp {
             this.displayQueue();
         } catch (error) {
             console.error('Ошибка загрузки очереди:', error);
+        }
+    }
+
+    async downloadZip() {
+        if (!this.currentPath) {
+            this.showNotification('Выберите папку для архивации', 'error');
+            return;
+        }
+
+        try {
+            this.zipBtn.disabled = true;
+            this.zipBtn.innerHTML = '<div class="loading"></div> Создание архива...';
+
+            const response = await fetch(`/api/zip?path=${encodeURIComponent(this.currentPath)}`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            // Получаем blob из ответа
+            const blob = await response.blob();
+            
+            // Извлекаем имя папки для имени файла
+            const folderName = this.currentPath.split(/[/\\]/).pop() || 'archive';
+            const filename = `${folderName}.zip`;
+
+            // Создаем ссылку для скачивания
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            
+            // Очищаем
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            this.showNotification(`✅ Архив ${filename} успешно создан`, 'success');
+        } catch (error) {
+            console.error('❌ Zip error:', error);
+            this.showNotification('Ошибка создания архива: ' + error.message, 'error');
+        } finally {
+            this.zipBtn.disabled = false;
+            this.zipBtn.innerHTML = '📦 Скачать ZIP';
         }
     }
 }
