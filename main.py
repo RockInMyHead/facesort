@@ -539,6 +539,81 @@ async def move_item(srcPath: str = Query(...), destPath: str = Query(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка перемещения: {str(e)}")
 
+@app.post("/api/create-folder")
+async def create_folder(path: str = Query(...), name: str = Query(...)):
+    """Создать новую папку"""
+    parent_path = Path(path)
+    
+    if not parent_path.exists() or not parent_path.is_dir():
+        raise HTTPException(status_code=404, detail="Родительская папка не найдена")
+    
+    new_folder = parent_path / name
+    
+    if new_folder.exists():
+        raise HTTPException(status_code=400, detail="Папка с таким именем уже существует")
+    
+    try:
+        new_folder.mkdir(parents=False, exist_ok=False)
+        return {"message": f"✅ Папка '{name}' создана", "path": str(new_folder)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка создания папки: {str(e)}")
+
+@app.post("/api/create-file")
+async def create_file(path: str = Query(...), name: str = Query(...)):
+    """Создать новый файл"""
+    parent_path = Path(path)
+    
+    if not parent_path.exists() or not parent_path.is_dir():
+        raise HTTPException(status_code=404, detail="Родительская папка не найдена")
+    
+    new_file = parent_path / name
+    
+    if new_file.exists():
+        raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
+    
+    try:
+        new_file.touch()
+        return {"message": f"✅ Файл '{name}' создан", "path": str(new_file)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка создания файла: {str(e)}")
+
+@app.post("/api/rename")
+async def rename_item(oldPath: str = Query(...), newName: str = Query(...)):
+    """Переименовать файл или папку"""
+    old_path = Path(oldPath)
+    
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail="Файл или папка не найдена")
+    
+    new_path = old_path.parent / newName
+    
+    if new_path.exists():
+        raise HTTPException(status_code=400, detail="Файл или папка с таким именем уже существует")
+    
+    try:
+        old_path.rename(new_path)
+        return {"message": f"✅ Переименовано в '{newName}'", "oldPath": str(old_path), "newPath": str(new_path)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка переименования: {str(e)}")
+
+@app.delete("/api/delete")
+async def delete_item(path: str = Query(...)):
+    """Удалить файл или папку"""
+    item_path = Path(path)
+    
+    if not item_path.exists():
+        raise HTTPException(status_code=404, detail="Файл или папка не найдена")
+    
+    try:
+        if item_path.is_dir():
+            shutil.rmtree(item_path)
+            return {"message": f"✅ Папка '{item_path.name}' удалена", "path": str(item_path)}
+        else:
+            item_path.unlink()
+            return {"message": f"✅ Файл '{item_path.name}' удален", "path": str(item_path)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка удаления: {str(e)}")
+
 @app.get("/favicon.ico")
 async def favicon():
     """Возвращает простой favicon чтобы избежать 404 ошибок"""

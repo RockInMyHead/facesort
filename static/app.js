@@ -28,6 +28,20 @@ class PhotoClusterApp {
         this.clearTasksBtn = document.getElementById('clearTasksBtn');
         this.zipBtn = document.getElementById('zipBtn');
         
+        // Элементы управления файлами
+        this.fileToolbar = document.getElementById('fileToolbar');
+        this.newFolderBtn = document.getElementById('newFolderBtn');
+        this.refreshBtn = document.getElementById('refreshBtn');
+        this.contextMenu = document.getElementById('contextMenu');
+        this.createFolderModal = document.getElementById('createFolderModal');
+        this.renameModal = document.getElementById('renameModal');
+        this.folderNameInput = document.getElementById('folderNameInput');
+        this.renameInput = document.getElementById('renameInput');
+        
+        // Переменные для контекстного меню
+        this.contextMenuItem = null;
+        this.contextItemPath = null;
+        
         // Проверяем что все элементы найдены
         const elements = {
             driveButtons: this.driveButtons,
@@ -41,7 +55,9 @@ class PhotoClusterApp {
             addQueueBtn: this.addQueueBtn,
             tasksList: this.tasksList,
             clearTasksBtn: this.clearTasksBtn,
-            zipBtn: this.zipBtn
+            zipBtn: this.zipBtn,
+            fileToolbar: this.fileToolbar,
+            contextMenu: this.contextMenu
         };
         
         for (const [name, element] of Object.entries(elements)) {
@@ -71,6 +87,43 @@ class PhotoClusterApp {
         this.processBtn.addEventListener('click', () => this.processQueue());
         this.clearBtn.addEventListener('click', () => this.clearQueue());
         this.zipBtn.addEventListener('click', () => this.downloadZip());
+        
+        // Кнопки управления файлами
+        this.newFolderBtn.addEventListener('click', () => this.openCreateFolderModal());
+        this.refreshBtn.addEventListener('click', () => this.refreshCurrentFolder());
+        
+        // Контекстное меню
+        this.contextMenu.addEventListener('click', (e) => {
+            const action = e.target.closest('.context-menu-item')?.dataset.action;
+            if (action) {
+                this.handleContextAction(action);
+                this.hideContextMenu();
+            }
+        });
+        
+        // Закрыть контекстное меню при клике вне его
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu')) {
+                this.hideContextMenu();
+            }
+        });
+        
+        // Закрыть модальное окно при клике на фон
+        [this.createFolderModal, this.renameModal].forEach(modal => {
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    this.closeModal(modal.id);
+                }
+            });
+        });
+        
+        // Enter для модальных окон
+        this.folderNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.createFolder();
+        });
+        this.renameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.renameItem();
+        });
         this.includeExcludedBtn.addEventListener('click', async () => {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
@@ -153,8 +206,9 @@ class PhotoClusterApp {
             this.currentPathEl.innerHTML = `<strong>Текущая папка:</strong> ${path}`;
             await this.displayFolderContents(data.contents);
             
-            // Активируем кнопку ZIP когда выбрана папка
+            // Активируем кнопку ZIP и показываем панель инструментов
             this.zipBtn.disabled = false;
+            this.fileToolbar.style.display = 'flex';
             
         } catch (error) {
             this.showNotification('Ошибка доступа к папке: ' + error.message, 'error');
@@ -236,6 +290,9 @@ class PhotoClusterApp {
                     caption.textContent = item.name.replace('📂 ', '');
                     div.appendChild(caption);
                     
+                    // Добавляем контекстное меню
+                    this.addContextMenuToElement(div, item.path, item.name);
+                    
                     this.folderContents.appendChild(div);
                 } else {
                     // Обычная папка без превью
@@ -288,6 +345,11 @@ class PhotoClusterApp {
                         });
                     }
                     
+                    // Добавляем контекстное меню
+                    if (!isExcluded) {
+                        this.addContextMenuToElement(button, item.path, item.name);
+                    }
+                    
                     this.folderContents.appendChild(button);
                 }
                 continue;
@@ -328,6 +390,9 @@ class PhotoClusterApp {
                 caption.className = 'thumbnail-caption';
                 caption.textContent = item.name.replace('🖼 ', '');
                 div.appendChild(caption);
+                
+                // Добавляем контекстное меню
+                this.addContextMenuToElement(div, item.path, item.name);
                 
                 this.folderContents.appendChild(div);
                 continue;
@@ -775,6 +840,157 @@ class PhotoClusterApp {
             this.displayQueue();
         } catch (error) {
             console.error('Ошибка загрузки очереди:', error);
+        }
+    }
+
+    addContextMenuToElement(element, itemPath, itemName) {
+        element.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Не показываем контекстное меню для навигации "Назад"
+            if (itemName.includes('⬅️')) return;
+            
+            this.contextItemPath = itemPath;
+            this.contextItemName = itemName;
+            
+            // Позиционируем меню
+            this.contextMenu.style.left = `${e.pageX}px`;
+            this.contextMenu.style.top = `${e.pageY}px`;
+            this.contextMenu.classList.add('show');
+        });
+    }
+
+    hideContextMenu() {
+        this.contextMenu.classList.remove('show');
+    }
+
+    handleContextAction(action) {
+        if (!this.contextItemPath) return;
+        
+        switch(action) {
+            case 'rename':
+                this.openRenameModal();
+                break;
+            case 'delete':
+                this.deleteItemConfirm();
+                break;
+        }
+    }
+
+    openCreateFolderModal() {
+        if (!this.currentPath) {
+            this.showNotification('Выберите папку', 'error');
+            return;
+        }
+        this.folderNameInput.value = '';
+        this.createFolderModal.classList.add('show');
+        setTimeout(() => this.folderNameInput.focus(), 100);
+    }
+
+    openRenameModal() {
+        // Извлекаем чистое имя без эмодзи
+        let cleanName = this.contextItemName
+            .replace('📂 ', '')
+            .replace('🖼 ', '')
+            .replace(' (не обрабатывается)', '');
+        
+        this.renameInput.value = cleanName;
+        this.renameModal.classList.add('show');
+        setTimeout(() => {
+            this.renameInput.focus();
+            this.renameInput.select();
+        }, 100);
+    }
+
+    closeModal(modalId) {
+        document.getElementById(modalId).classList.remove('show');
+    }
+
+    async createFolder() {
+        const folderName = this.folderNameInput.value.trim();
+        
+        if (!folderName) {
+            this.showNotification('Введите название папки', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/create-folder?path=${encodeURIComponent(this.currentPath)}&name=${encodeURIComponent(folderName)}`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.detail || 'Ошибка создания папки');
+            }
+
+            this.showNotification(result.message, 'success');
+            this.closeModal('createFolderModal');
+            await this.refreshCurrentFolder();
+        } catch (error) {
+            this.showNotification('Ошибка: ' + error.message, 'error');
+        }
+    }
+
+    async renameItem() {
+        const newName = this.renameInput.value.trim();
+        
+        if (!newName) {
+            this.showNotification('Введите новое название', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/rename?oldPath=${encodeURIComponent(this.contextItemPath)}&newName=${encodeURIComponent(newName)}`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.detail || 'Ошибка переименования');
+            }
+
+            this.showNotification(result.message, 'success');
+            this.closeModal('renameModal');
+            await this.refreshCurrentFolder();
+        } catch (error) {
+            this.showNotification('Ошибка: ' + error.message, 'error');
+        }
+    }
+
+    async deleteItemConfirm() {
+        const itemName = this.contextItemName
+            .replace('📂 ', '')
+            .replace('🖼 ', '');
+        
+        if (!confirm(`Вы уверены, что хотите удалить "${itemName}"?`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/delete?path=${encodeURIComponent(this.contextItemPath)}`, {
+                method: 'DELETE'
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.detail || 'Ошибка удаления');
+            }
+
+            this.showNotification(result.message, 'success');
+            await this.refreshCurrentFolder();
+        } catch (error) {
+            this.showNotification('Ошибка: ' + error.message, 'error');
+        }
+    }
+
+    async refreshCurrentFolder() {
+        if (this.currentPath) {
+            await this.navigateToFolder(this.currentPath);
         }
     }
 
