@@ -3,9 +3,10 @@ param(
     [switch]$NoWinget
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 Write-Host "=== Facesort Windows Setup ===" -ForegroundColor Cyan
+Write-Host "Текущая директория: $PWD" -ForegroundColor DarkGray
 
 function Test-Command($name) {
     try { Get-Command $name -ErrorAction Stop | Out-Null; return $true } catch { return $false }
@@ -21,7 +22,7 @@ function Ensure-Winget() {
 function Winget-Install($id, $name) {
     if (-not (Ensure-Winget)) { return }
     Write-Host "[winget] Установка: $name ..." -ForegroundColor Yellow
-    winget install --id $id --silent --accept-source-agreements --accept-package-agreements | Out-Null
+    try { winget install --id $id --silent --accept-source-agreements --accept-package-agreements | Out-Null } catch { Write-Warning "winget: пропуск $name ($_ )" }
 }
 
 # 1) Базовые инструменты
@@ -39,19 +40,19 @@ if (-not $py) { throw "Python не найден. Установите Python и 
 
 # 3) Создание и активация venv
 Write-Host "[python] Настраиваю виртуальное окружение..." -ForegroundColor Yellow
-& $py -m venv venv
+try { & $py -m venv venv } catch { Write-Warning "Не удалось создать venv: $_" }
 
 $venvActivate = Join-Path $PWD 'venv\Scripts\Activate.ps1'
 if (-not (Test-Path $venvActivate)) { throw "Не найдено venv Activate.ps1" }
-. $venvActivate
+try { . $venvActivate } catch { Write-Warning "Не удалось активировать venv: $_" }
 
 # 4) Обновление pip и установка зависимостей
 Write-Host "[pip] Обновление pip..." -ForegroundColor Yellow
-python -m pip install --upgrade pip wheel setuptools
+python -m pip install --upgrade pip wheel setuptools || Write-Warning "pip upgrade failed"
 
 if (Test-Path 'requirements.txt') {
     Write-Host "[pip] Установка зависимостей из requirements.txt..." -ForegroundColor Yellow
-    python -m pip install -r requirements.txt
+    python -m pip install -r requirements.txt || Write-Warning "requirements install failed"
 }
 
 # 5) Установка ключевых пакетов (на случай отсутствия в requirements)
@@ -62,7 +63,7 @@ def ensure(pkg):
     try:
         __import__(pkg.split('==')[0].split('[')[0])
     except Exception:
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
+        subprocess.call([sys.executable, '-m', 'pip', 'install', pkg])
 
 for p in [
     'fastapi',
@@ -82,8 +83,11 @@ PY
 Write-Host "[insightface] Предзагрузка моделей..." -ForegroundColor Yellow
 python - << 'PY'
 from insightface.app import FaceAnalysis
-app = FaceAnalysis(name='buffalo_l')
-app.prepare(ctx_id=-1, det_size=(640,640))
+try:
+    app = FaceAnalysis(name='buffalo_l')
+    app.prepare(ctx_id=-1, det_size=(640,640))
+except Exception as e:
+    print('Skip model preload:', e)
 print('Models ready')
 PY
 
