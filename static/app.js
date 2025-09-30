@@ -810,7 +810,7 @@ class PhotoClusterApp {
             
             // Обновляем UI
             await this.loadQueue();
-            await this.loadFolderContents(this.currentPath);
+            await this.refreshCurrentFolder();
         } catch (error) {
             console.error('❌ Move error:', error);
             this.showNotification('Ошибка перемещения: ' + error.message, 'error');
