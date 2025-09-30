@@ -7,10 +7,15 @@ pushd "%~dp0"
 REM Обеспечить кодировку UTF-8 в консоли Python
 set PYTHONIOENCODING=utf-8
 
-REM Проверка наличия Python launcher
-where py >nul 2>nul
-if errorlevel 1 (
-  echo [ERROR] Python launcher 'py' не найден. Установите Python с опцией "Add to PATH" и попробуйте снова.
+REM Поиск доступного Python интерпретатора (py или python)
+set "PY_CMD="
+where py >nul 2>nul && set "PY_CMD=py"
+if not defined PY_CMD (
+  where python >nul 2>nul && set "PY_CMD=python"
+)
+if not defined PY_CMD (
+  echo [ERROR] Python не найден. Установите Python 3.11+ с опцией "Add to PATH" и попробуйте снова.
+  echo Ссылка: https://www.python.org/downloads/windows/
   pause
   exit /b 1
 )
@@ -18,7 +23,7 @@ if errorlevel 1 (
 REM Создать venv, если отсутствует
 if not exist "venv\Scripts\python.exe" (
   echo [INFO] Создаю виртуальное окружение...
-  py -m venv venv
+  %PY_CMD% -m venv venv
   if errorlevel 1 (
     echo [ERROR] Не удалось создать виртуальное окружение.
     pause
