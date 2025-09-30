@@ -712,16 +712,22 @@ class PhotoClusterApp {
                 method: 'POST',
                 cache: 'no-store'
             });
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.detail || `HTTP ${response.status}`);
-            }
+            
             const result = await response.json();
-            this.showNotification(result.message, 'success');
+            
+            if (!response.ok) {
+                throw new Error(result.detail || `Ошибка ${response.status}`);
+            }
+            
+            // Показываем уведомление об успехе
+            this.showNotification(result.message || '✅ Файл перемещен', 'success');
+            
+            // Обновляем UI
             await this.loadQueue();
             await this.loadFolderContents(this.currentPath);
         } catch (error) {
-            this.showNotification('Ошибка перемещения файла: ' + error.message, 'error');
+            console.error('❌ Move error:', error);
+            this.showNotification('Ошибка перемещения: ' + error.message, 'error');
         } finally {
             this.pendingMoves.delete(key);
         }

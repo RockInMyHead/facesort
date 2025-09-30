@@ -502,26 +502,42 @@ async def move_item(srcPath: str = Query(...), destPath: str = Query(...)):
     """Переместить файл или папку"""
     src_path = Path(srcPath)
     dest_path = Path(destPath)
+    
     if not src_path.exists():
         raise HTTPException(status_code=404, detail="Источник не найден")
     
-    # Если destination - папка, добавляем имя файла
-    if dest_path.is_dir():
-        target = dest_path / src_path.name
-    elif dest_path.exists():
-        # Если destination - файл, используем родительскую папку
-        target = dest_path.parent / src_path.name
-    else:
-        # Если destination не существует, считаем что это папка
-        target = dest_path / src_path.name
-    
     try:
-        # Создаем папку назначения если её нет
-        target.parent.mkdir(parents=True, exist_ok=True)
+        # Определяем целевой путь
+        if dest_path.exists():
+            if dest_path.is_dir():
+                # Если destination - существующая папка
+                target = dest_path / src_path.name
+            else:
+                # Если destination - существующий файл, используем родительскую папку
+                target = dest_path.parent / src_path.name
+        else:
+            # Если destination не существует, создаем его как папку
+            dest_path.mkdir(parents=True, exist_ok=True)
+            target = dest_path / src_path.name
+        
+        # Проверяем, не пытаемся ли переместить файл на самого себя
+        if src_path.resolve() == target.resolve():
+            return {"message": "Файл уже находится в целевой папке", "src": str(src_path), "dest": str(target)}
+        
+        # Если целевой файл уже существует, добавляем суффикс
+        if target.exists():
+            base_name = target.stem
+            extension = target.suffix
+            counter = 1
+            while target.exists():
+                target = target.parent / f"{base_name}_{counter}{extension}"
+                counter += 1
+        
+        # Перемещаем файл
         shutil.move(str(src_path), str(target))
-        return {"message": "Успешно перемещено", "src": str(src_path), "dest": str(target)}
+        return {"message": f"✅ Файл перемещен: {src_path.name}", "src": str(src_path), "dest": str(target)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка перемещения: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка перемещения: {str(e)}")
 
 @app.get("/favicon.ico")
 async def favicon():
