@@ -63,6 +63,13 @@ start "" "http://localhost:8000"
 
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
+REM Держать окно открытым, если сервер завершился с ошибкой
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Сервер завершился. Нажмите любую клавишу для выхода...
+  pause >nul
+)
+
 popd
 endlocal
 

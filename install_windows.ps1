@@ -88,4 +88,8 @@ print('Models ready')
 PY
 
 Write-Host "=== Готово. Запуск: run_facesort.bat ===" -ForegroundColor Green
+try {
+    # Оставить окно открытым, чтобы пользователь видел результат
+    Read-Host "Нажмите Enter для выхода"
+} catch {}
 
