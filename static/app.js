@@ -199,6 +199,7 @@ class PhotoClusterApp {
                     
                     // Drag & Drop для папки
                     div.addEventListener('dragstart', e => {
+                        console.log('🔧 Drag start:', item.path);
                         e.dataTransfer.setData('text/plain', item.path);
                         e.dataTransfer.effectAllowed = 'move';
                     });
@@ -214,6 +215,7 @@ class PhotoClusterApp {
                         e.preventDefault();
                         div.classList.remove('drag-over');
                         const src = e.dataTransfer.getData('text/plain');
+                        console.log('🔧 Drop event:', src, '→', item.path);
                         this.moveItem(src, item.path);
                     });
                     
@@ -698,14 +700,20 @@ class PhotoClusterApp {
     }
 
     async moveItem(srcPath, destPath) {
+        console.log('🔧 moveItem called:', srcPath, '→', destPath);
         try {
             const response = await fetch(`/api/move?srcPath=${encodeURIComponent(srcPath)}&destPath=${encodeURIComponent(destPath)}`, {
                 method: 'POST',
                 cache: 'no-store'
             });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Ошибка сервера');
+            }
             const result = await response.json();
             this.showNotification(result.message, 'success');
             await this.loadQueue(); // Обновляем очередь после перемещения
+            await this.loadFolderContents(this.currentPath); // Обновляем текущую папку
         } catch (error) {
             this.showNotification('Ошибка перемещения файла: ' + error.message, 'error');
         }
