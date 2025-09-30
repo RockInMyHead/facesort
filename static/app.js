@@ -496,19 +496,26 @@ class PhotoClusterApp {
         try {
             // Используем initialPath для поиска общих папок
             const rootPath = this.initialPath || this.currentPath;
+            if (!rootPath) {
+                this.showNotification('Сначала выберите корневую папку для поиска "Общие"', 'error');
+                return;
+            }
+
             const response = await fetch(`/api/folder?path=${encodeURIComponent(rootPath)}&_ts=${Date.now()}`, { cache: 'no-store' });
             const data = await response.json();
-            
-        const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
+
+            const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
             const excludedFolders = [];
-            
-            // Находим все папки с исключаемыми названиями
-            for (const item of data.items) {
-                if (item.type === 'folder') {
+
+            // Данные от бэкенда приходят в поле contents
+            const items = Array.isArray(data.contents) ? data.contents : [];
+
+            // Находим все папки с исключаемыми названиями на текущем уровне
+            for (const item of items) {
+                if (item.is_directory) {
                     const folderName = item.name.replace('📂 ', '');
                     const folderNameLower = folderName.toLowerCase();
-        
-        for (const excludedName of excludedNames) {
+                    for (const excludedName of excludedNames) {
                         if (folderNameLower.includes(excludedName)) {
                             excludedFolders.push(item.path);
                             break;
@@ -516,7 +523,7 @@ class PhotoClusterApp {
                     }
                 }
             }
-            
+
             // Добавляем найденные папки в очередь с флагом includeExcluded
             for (const folderPath of excludedFolders) {
                 await this.addToQueueDirect(folderPath, true);
