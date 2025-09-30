@@ -812,8 +812,8 @@
                 <input type="text" class="modal-input" id="folderNameInput" placeholder="Введите название папки">
             </div>
             <div class="modal-footer">
-                <button class="modal-btn secondary" onclick="app.closeModal('createFolderModal')">Отмена</button>
-                <button class="modal-btn primary" onclick="app.createFolder()">Создать</button>
+                <button class="modal-btn secondary" id="cancelCreateFolderBtn">Отмена</button>
+                <button class="modal-btn primary" id="confirmCreateFolderBtn">Создать</button>
             </div>
         </div>
     </div>
@@ -826,8 +826,8 @@
                 <input type="text" class="modal-input" id="renameInput" placeholder="Введите новое название">
             </div>
             <div class="modal-footer">
-                <button class="modal-btn secondary" onclick="app.closeModal('renameModal')">Отмена</button>
-                <button class="modal-btn primary" onclick="app.renameItem()">Переименовать</button>
+                <button class="modal-btn secondary" id="cancelRenameBtn">Отмена</button>
+                <button class="modal-btn primary" id="confirmRenameBtn">Переименовать</button>
             </div>
         </div>
     </div>

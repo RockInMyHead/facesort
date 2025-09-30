@@ -124,6 +124,20 @@ class PhotoClusterApp {
         this.renameInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.renameItem();
         });
+        
+        // Кнопки модальных окон
+        document.getElementById('cancelCreateFolderBtn').addEventListener('click', () => {
+            this.closeModal('createFolderModal');
+        });
+        document.getElementById('confirmCreateFolderBtn').addEventListener('click', () => {
+            this.createFolder();
+        });
+        document.getElementById('cancelRenameBtn').addEventListener('click', () => {
+            this.closeModal('renameModal');
+        });
+        document.getElementById('confirmRenameBtn').addEventListener('click', () => {
+            this.renameItem();
+        });
         this.includeExcludedBtn.addEventListener('click', async () => {
             this.includeExcluded = !this.includeExcluded;
             this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
@@ -478,7 +492,7 @@ class PhotoClusterApp {
             const response = await fetch(`/api/folder?path=${encodeURIComponent(rootPath)}&_ts=${Date.now()}`, { cache: 'no-store' });
             const data = await response.json();
             
-            const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
+        const excludedNames = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"];
             const excludedFolders = [];
             
             // Находим все папки с исключаемыми названиями
@@ -486,8 +500,8 @@ class PhotoClusterApp {
                 if (item.type === 'folder') {
                     const folderName = item.name.replace('📂 ', '');
                     const folderNameLower = folderName.toLowerCase();
-                    
-                    for (const excludedName of excludedNames) {
+        
+        for (const excludedName of excludedNames) {
                         if (folderNameLower.includes(excludedName)) {
                             excludedFolders.push(item.path);
                             break;
@@ -826,7 +840,7 @@ class PhotoClusterApp {
         notification.className = `notification ${type}`;
         notification.textContent = message;
         document.body.appendChild(notification);
-
+        
         setTimeout(() => {
             notification.remove();
         }, 3000);
