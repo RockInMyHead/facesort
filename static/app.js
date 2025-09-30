@@ -140,19 +140,25 @@ class PhotoClusterApp {
             this.renameItem();
         });
         this.includeExcludedBtn.addEventListener('click', async () => {
-            this.includeExcluded = !this.includeExcluded;
-            this.includeExcludedBtn.classList.toggle('active', this.includeExcluded);
+            // Кнопка "Общие" всегда запускает обработку с includeExcluded=true
+            console.log('🔍 Кнопка "Общие" нажата - запускаем обработку общих фото');
             
-            console.log(`🔍 Кнопка "Общие" нажата. includeExcluded = ${this.includeExcluded}`);
+            // Временно устанавливаем includeExcluded в true
+            const previousValue = this.includeExcluded;
+            this.includeExcluded = true;
             
-            if (this.includeExcluded) {
-                // Ждем добавления папок 'Общие' в очередь
+            try {
+                // Добавляем папки 'Общие' в очередь
                 console.log('🔍 Добавляем исключенные папки в очередь...');
                 await this.addExcludedFoldersToQueue();
+                
+                // Запускаем обработку очереди с includeExcluded=true
+                console.log('🔍 Запускаем processQueue с includeExcluded=true');
+                await this.processQueue();
+            } finally {
+                // Возвращаем предыдущее значение
+                this.includeExcluded = previousValue;
             }
-            // Запускаем обработку очереди с учётом включенных 'общих' папок
-            console.log(`🔍 Запускаем processQueue с includeExcluded = ${this.includeExcluded}`);
-            await this.processQueue();
         });
         // Кнопка добавить в очередь
         this.addQueueBtn.addEventListener('click', () => this.addToQueue(this.currentPath));
