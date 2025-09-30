@@ -57,7 +57,7 @@ if (Test-Path 'requirements.txt') {
 
 # 5) Установка ключевых пакетов (на случай отсутствия в requirements)
 Write-Host "[pip] Проверка и установка ключевых пакетов..." -ForegroundColor Yellow
-python - << 'PY'
+$pyCode = @"
 import sys, subprocess
 def ensure(pkg):
     try:
@@ -77,19 +77,21 @@ for p in [
 ]:
     ensure(p)
 print('OK')
-PY
+"@
+$pyCode | python -
 
 # 6) Предзагрузка моделей InsightFace (ускоряет первый запуск)
 Write-Host "[insightface] Предзагрузка моделей..." -ForegroundColor Yellow
-python - << 'PY'
-from insightface.app import FaceAnalysis
+$pyPreload = @"
 try:
+    from insightface.app import FaceAnalysis
     app = FaceAnalysis(name='buffalo_l')
     app.prepare(ctx_id=-1, det_size=(640,640))
+    print('Models ready')
 except Exception as e:
     print('Skip model preload:', e)
-print('Models ready')
-PY
+"@
+$pyPreload | python -
 
 Write-Host "=== Готово. Запуск: run_facesort.bat ===" -ForegroundColor Green
 try {
