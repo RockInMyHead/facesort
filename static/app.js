@@ -5,6 +5,7 @@ class PhotoClusterApp {
         this.initialPath = '';
         this.queue = [];
         this.lastTasksStr = '';
+        this.pendingMoves = new Set();
         
         this.initializeElements();
         this.setupEventListeners();
