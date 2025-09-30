@@ -194,7 +194,31 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
                 if has_images:
                     subdirs_with_images.append(p)
         
-        if len(subdirs_with_images) > 1:
+        if include_excluded:
+            # Всегда используем обработку общих папок, если флаг включен
+            def group_progress_callback(progress_text: str, percent: int = None):
+                if task_id in app_state["current_tasks"]:
+                    app_state["current_tasks"][task_id]["message"] = progress_text
+                    if percent is not None:
+                        app_state["current_tasks"][task_id]["progress"] = percent
+                    else:
+                        try:
+                            if "%" in progress_text:
+                                match = re.search(r'(\d+)%', progress_text)
+                                if match:
+                                    app_state["current_tasks"][task_id]["progress"] = int(match.group(1))
+                        except:
+                            pass
+
+            app_state["current_tasks"][task_id]["message"] = "Обработка общих фотографий..."
+            app_state["current_tasks"][task_id]["progress"] = 10
+            process_group_folder(path, progress_callback=group_progress_callback, include_excluded=True)
+            result = ProcessingResult(
+                moved=0, copied=0, clusters_count=0,
+                unreadable_count=0, no_faces_count=0,
+                unreadable_files=[], no_faces_files=[]
+            )
+        elif len(subdirs_with_images) > 1:
             # Групповая обработка
             def group_progress_callback(progress_text: str, percent: int = None):
                 if task_id in app_state["current_tasks"]:

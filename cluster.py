@@ -289,6 +289,15 @@ def distribute_to_folders(plan: dict, base_dir: Path, cluster_start: int = 1, pr
             dst = base_dir / f"{cluster_id}" / src.name
             dst.parent.mkdir(parents=True, exist_ok=True)
             try:
+                # Skip if source and destination are the same file
+                try:
+                    if src.resolve() == dst.resolve():
+                        print(f"⚠️ Пропуск перемещения (одинаковые пути): {src} → {dst}")
+                        continue
+                except Exception:
+                    if str(src) == str(dst):
+                        print(f"⚠️ Пропуск перемещения (одинаковые строки): {src} → {dst}")
+                        continue
                 shutil.move(str(src), str(dst))
                 moved += 1
                 moved_paths.add(src.parent)
@@ -299,6 +308,15 @@ def distribute_to_folders(plan: dict, base_dir: Path, cluster_start: int = 1, pr
                 dst = base_dir / f"{cluster_id}" / src.name
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 try:
+                    # Skip if source and destination are the same file
+                    try:
+                        if src.resolve() == dst.resolve():
+                            print(f"⚠️ Пропуск копирования (одинаковые пути): {src} → {dst}")
+                            continue
+                    except Exception:
+                        if str(src) == str(dst):
+                            print(f"⚠️ Пропуск копирования (одинаковые строки): {src} → {dst}")
+                            continue
                     shutil.copy2(str(src), str(dst))
                     copied += 1
                 except Exception as e:
