@@ -701,21 +701,29 @@ class PhotoClusterApp {
 
     async moveItem(srcPath, destPath) {
         console.log('🔧 moveItem called:', srcPath, '→', destPath);
+        const key = `${srcPath}→${destPath}`;
+        if (this.pendingMoves.has(key)) {
+            console.log('⏩ Duplicate move ignored for', key);
+            return;
+        }
+        this.pendingMoves.add(key);
         try {
             const response = await fetch(`/api/move?srcPath=${encodeURIComponent(srcPath)}&destPath=${encodeURIComponent(destPath)}`, {
                 method: 'POST',
                 cache: 'no-store'
             });
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Ошибка сервера');
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP ${response.status}`);
             }
             const result = await response.json();
             this.showNotification(result.message, 'success');
-            await this.loadQueue(); // Обновляем очередь после перемещения
-            await this.loadFolderContents(this.currentPath); // Обновляем текущую папку
+            await this.loadQueue();
+            await this.loadFolderContents(this.currentPath);
         } catch (error) {
             this.showNotification('Ошибка перемещения файла: ' + error.message, 'error');
+        } finally {
+            this.pendingMoves.delete(key);
         }
     }
 
