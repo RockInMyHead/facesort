@@ -314,7 +314,7 @@ class PhotoClusterApp {
                     });
                     
                     const img = document.createElement('img');
-                    img.src = `/api/image/preview?path=${encodeURIComponent(imgs[0].path)}&size=120&_ts=${Date.now()}`;
+                    img.src = `/api/image/preview?path=${encodeURIComponent(imgs[0].path)}&size=150&_ts=${Date.now()}`;
                     img.alt = item.name.replace('📂 ', '');
                     div.appendChild(img);
                     
@@ -415,7 +415,7 @@ class PhotoClusterApp {
                 });
                 
                 const img = document.createElement('img');
-                img.src = `/api/image/preview?path=${encodeURIComponent(item.path)}&size=120&_ts=${Date.now()}`;
+                img.src = `/api/image/preview?path=${encodeURIComponent(item.path)}&size=150&_ts=${Date.now()}`;
                 img.alt = item.name.replace('🖼 ', '');
                 div.appendChild(img);
                 
