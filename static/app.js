@@ -243,7 +243,8 @@ class PhotoClusterApp {
             // Активируем кнопку ZIP и показываем панель инструментов
             this.zipBtn.disabled = false;
             this.fileToolbar.style.display = 'flex';
-            
+            // Перезапускаем автообновление для новой папки
+            this.startAutoRefresh();
         } catch (error) {
             this.showNotification('Ошибка доступа к папке: ' + error.message, 'error');
         }
@@ -807,7 +808,7 @@ class PhotoClusterApp {
             this.autoRefreshTimer = setInterval(async () => {
                 if (this.currentPath) {
                     console.log('🔄 Автообновление папки:', this.currentPath);
-                    await this.refreshCurrentFolderSilent();
+                    await this.refreshCurrentFolder();
                 }
             }, this.autoRefreshInterval);
         }
