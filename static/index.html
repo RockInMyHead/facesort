@@ -151,22 +151,36 @@
         }
 
         .folder-contents {
-            max-height: 400px;
+            max-height: 70vh;
+            min-height: 500px;
             overflow-y: auto;
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
+            padding: 10px;
+            background: #fafafa;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
         }
         /* Стили для превью изображений */
         .thumbnail {
-            width: 150px;
+            width: 140px;
             text-align: center;
+            background: white;
+            border-radius: 8px;
+            padding: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .thumbnail:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
         .thumbnail img {
-            width: 150px;
-            height: 150px;
+            width: 120px;
+            height: 120px;
             object-fit: cover;
-            border-radius: 8px;
+            border-radius: 6px;
             pointer-events: none;
         }
         
@@ -715,6 +729,20 @@
             .modal-content {
                 width: 95%;
                 padding: 20px;
+            }
+
+            .folder-contents {
+                max-height: 60vh;
+                min-height: 400px;
+            }
+
+            .thumbnail {
+                width: 120px;
+            }
+
+            .thumbnail img {
+                width: 100px;
+                height: 100px;
             }
         }
     </style>
