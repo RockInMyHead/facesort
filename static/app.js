@@ -9,7 +9,7 @@ class PhotoClusterApp {
         
         // Автообновление
         this.autoRefreshEnabled = true;
-        this.autoRefreshInterval = 5000; // 5 секунд
+        this.autoRefreshInterval = 1000; // 1 секунда
         this.autoRefreshTimer = null;
         this.lastFolderContents = '';
         
@@ -803,8 +803,10 @@ class PhotoClusterApp {
         }
         
         if (this.autoRefreshEnabled) {
+            console.log('🔄 Запуск автообновления каждые', this.autoRefreshInterval, 'мс');
             this.autoRefreshTimer = setInterval(async () => {
                 if (this.currentPath) {
+                    console.log('🔄 Автообновление папки:', this.currentPath);
                     await this.refreshCurrentFolderSilent();
                 }
             }, this.autoRefreshInterval);
@@ -849,12 +851,16 @@ class PhotoClusterApp {
     }
 
     async refreshCurrentFolderSilent() {
-        if (!this.currentPath) return;
+        if (!this.currentPath) {
+            console.log('🔄 Автообновление пропущено: нет текущей папки');
+            return;
+        }
         
         try {
             const response = await fetch(`/api/folder?path=${encodeURIComponent(this.currentPath)}&_ts=${Date.now()}`, { cache: 'no-store' });
             
             if (!response.ok) {
+                console.log('🔄 Автообновление пропущено: ошибка ответа', response.status);
                 return; // Молча игнорируем ошибки при автообновлении
             }
             
@@ -863,8 +869,11 @@ class PhotoClusterApp {
             
             // Обновляем только если содержимое изменилось
             if (this.lastFolderContents !== newContents) {
+                console.log('🔄 Содержимое папки изменилось, обновляем UI');
                 this.lastFolderContents = newContents;
                 await this.displayFolderContents(data.contents);
+            } else {
+                console.log('🔄 Содержимое папки не изменилось');
             }
             
         } catch (error) {
