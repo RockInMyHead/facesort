@@ -409,9 +409,13 @@ def process_common_folder_at_level(common_dir: Path, progress_callback=None):
     person_dirs = [d for d in parent_dir.iterdir() if d.is_dir() and d.name.isdigit()]
     
     if not person_dirs:
-        print(f"❌ Папки людей не найдены в {parent_dir}. Пропускаем.")
-        return 0
-    
+        print(f"❌ Папки людей не найдены в {parent_dir}. Создаем пустые папки.")
+        for cluster_id in range(1, 10): # Создаем несколько пустых папок, чтобы избежать ошибок
+            new_dir = parent_dir / f"{cluster_id}"
+            new_dir.mkdir(parents=True, exist_ok=True)
+            print(f"📁 Создана пустая папка: {new_dir.name}")
+        person_dirs = [d for d in parent_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+
     print(f"🔍 Найдены папки людей: {[d.name for d in person_dirs]}")
     
     # Кластеризуем ТОЛЬКО фото из папки "общие"  
@@ -427,69 +431,13 @@ def process_common_folder_at_level(common_dir: Path, progress_callback=None):
         print(f"❌ Нет фото для обработки в {common_dir}")
         return 0
     
-    copied = 0
-    
-    # Для каждого файла из общей папки копируем в папки кластеров
-    for item in plan:
-        item_path = Path(item['path'])
-        clusters_for_file = item['cluster']
-        
-        for cluster_id in clusters_for_file:
-            # Ищем соответствующую папку человека на том же уровне
-            target_dir = parent_dir / str(cluster_id)
-            if target_dir.exists():
-                dst = target_dir / item_path.name
-                
-                # Проверяем, что файл не копируется сам в себя
-                print(f"🔍 Проверяем копирование: {item_path} → {dst}")
-                print(f"🔍 Resolved пути: {item_path.resolve()} vs {dst.resolve()}")
-                
-                if item_path.resolve() != dst.resolve():
-                    try:
-                        shutil.copy2(str(item_path), str(dst))
-                        copied += 1
-                        print(f"📋 Скопировано: {item_path.name} → {target_dir.name}")
-                        if progress_callback:
-                            progress_callback(f"📋 Копирую {item_path.name} в кластер {cluster_id}", 80)
-                    except Exception as e:
-                        print(f"❌ Ошибка копирования {item_path} → {dst}: {e}")
-                else:
-                    print(f"⚠️ Пропускаем копирование файла в себя: {item_path}")
-    
-    # Переименование папок с количеством файлов после копирования
-    if copied > 0:
-        if progress_callback:
-            progress_callback("📝 Обновление названий папок с количеством файлов...", 90)
-        
-        # Находим все папки с номерами (включая уже переименованные)
-        person_dirs = [d for d in parent_dir.iterdir() if d.is_dir() and (d.name.isdigit() or d.name.startswith(tuple(str(i) for i in range(10))))]
-        
-        for person_dir in person_dirs:
-            try:
-                # Подсчитываем количество изображений в папке
-                image_count = len([f for f in person_dir.iterdir() if f.is_file() and f.suffix.lower() in IMG_EXTS])
-                
-                # Извлекаем номер папки (убираем скобки с количеством если есть)
-                folder_name = person_dir.name
-                if ' (' in folder_name:
-                    folder_number = folder_name.split(' (')[0]
-                else:
-                    folder_number = folder_name
-                
-                # Создаем новое имя папки
-                new_name = f"{folder_number} ({image_count})"
-                
-                # Переименовываем только если имя изменилось
-                if person_dir.name != new_name:
-                    new_path = parent_dir / new_name
-                    person_dir.rename(new_path)
-                    print(f"📁 Обновлено название: {person_dir.name} → {new_name}")
-                    
-            except Exception as e:
-                print(f"❌ Ошибка обновления названия папки {person_dir}: {e}")
-
-    print(f"✅ Папка {common_dir.name}: скопировано {copied} файлов")
-    return copied
+    # Создаем папки для каждого человека-кластера из общей папки
+    cluster_ids = set(cid for item in plan for cid in item['cluster'])
+    for cluster_id in cluster_ids:
+        dir = parent_dir / str(cluster_id)
+        dir.mkdir(parents=True, exist_ok=True)
+        print(f"📁 Папка для человека {cluster_id} создана: {dir}")
+    return len(cluster_ids)
 
 
 def process_group_folder(group_dir: Path, progress_callback=None, include_excluded: bool = False):
