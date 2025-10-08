@@ -431,13 +431,35 @@ def process_common_folder_at_level(common_dir: Path, progress_callback=None):
         print(f"❌ Нет фото для обработки в {common_dir}")
         return 0
     
-    # Создаем папки для каждого человека-кластера из общей папки
+    # Создаем папки для каждого человека-кластера из общей папки и две пустые дополнительные папки
+    existing_ids = set()
+    for d in parent_dir.iterdir():
+        if d.is_dir():
+            try:
+                id_str = d.name.split(' ')[0]
+                existing_ids.add(int(id_str))
+            except:
+                continue
     cluster_ids = set(cid for item in plan for cid in item['cluster'])
+    created = 0
+    # создать папки для людей без своих папок
     for cluster_id in cluster_ids:
-        dir = parent_dir / str(cluster_id)
-        dir.mkdir(parents=True, exist_ok=True)
-        print(f"📁 Папка для человека {cluster_id} создана: {dir}")
-    return len(cluster_ids)
+        if cluster_id not in existing_ids:
+            folder = parent_dir / str(cluster_id)
+            folder.mkdir(parents=True, exist_ok=True)
+            print(f"📁 Создана папка для человека {cluster_id}: {folder}")
+            created += 1
+    # обновить существующие идентификаторы
+    all_ids = existing_ids.union(cluster_ids)
+    # создать две пустые папки с продолжением нумерации
+    max_id = max(all_ids) if all_ids else 0
+    for i in range(1, 3):
+        new_id = max_id + i
+        folder = parent_dir / str(new_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        print(f"📁 Создана дополнительная пустая папка: {folder}")
+        created += 1
+    return created
 
 
 def process_group_folder(group_dir: Path, progress_callback=None, include_excluded: bool = False):
