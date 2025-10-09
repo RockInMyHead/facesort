@@ -8,8 +8,8 @@ class PhotoClusterApp {
         this.pendingMoves = new Set();
         
         // Автообновление
-        this.autoRefreshEnabled = true;
-        this.autoRefreshInterval = 1000; // 1 секунда
+        this.autoRefreshEnabled = false; // Отключаем по умолчанию
+        this.autoRefreshInterval = 3000; // 3 секунды (реже обновляем)
         this.autoRefreshTimer = null;
         this.lastFolderContents = '';
         
@@ -17,8 +17,6 @@ class PhotoClusterApp {
         this.setupEventListeners();
         this.loadInitialData();
         this.startTaskPolling();
-        this.startAutoRefresh();
-        this.updateAutoRefreshButton(this.autoRefreshEnabled);
     }
 
     initializeElements() {
@@ -40,8 +38,6 @@ class PhotoClusterApp {
         // Элементы управления файлами
         this.fileToolbar = document.getElementById('fileToolbar');
         this.newFolderBtn = document.getElementById('newFolderBtn');
-        this.refreshBtn = document.getElementById('refreshBtn');
-        this.autoRefreshBtn = document.getElementById('autoRefreshBtn');
         this.contextMenu = document.getElementById('contextMenu');
         this.createFolderModal = document.getElementById('createFolderModal');
         this.renameModal = document.getElementById('renameModal');
@@ -100,8 +96,6 @@ class PhotoClusterApp {
         
         // Кнопки управления файлами
         this.newFolderBtn.addEventListener('click', () => this.openCreateFolderModal());
-        this.refreshBtn.addEventListener('click', () => this.refreshCurrentFolder());
-        this.autoRefreshBtn.addEventListener('click', () => this.toggleAutoRefreshUI());
         
         // Контекстное меню
         this.contextMenu.addEventListener('click', (e) => {
@@ -226,7 +220,18 @@ class PhotoClusterApp {
             if (!this.initialPath) {
                 this.initialPath = path;
             }
-            const response = await fetch(`/api/folder?path=${encodeURIComponent(path)}&_ts=${Date.now()}`, { cache: 'no-store' });
+            
+            // Добавляем случайный параметр для предотвращения кеширования
+            const timestamp = Date.now();
+            const random = Math.random().toString(36).substring(7);
+            const response = await fetch(`/api/folder?path=${encodeURIComponent(path)}&_ts=${timestamp}&_r=${random}`, { 
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+            });
             
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -243,8 +248,6 @@ class PhotoClusterApp {
             // Активируем кнопку ZIP и показываем панель инструментов
             this.zipBtn.disabled = false;
             this.fileToolbar.style.display = 'flex';
-            // Перезапускаем автообновление для новой папки
-            this.startAutoRefresh();
         } catch (error) {
             this.showNotification('Ошибка доступа к папке: ' + error.message, 'error');
         }
@@ -315,7 +318,9 @@ class PhotoClusterApp {
                     });
                     
                     const img = document.createElement('img');
-                    img.src = `/api/image/preview?path=${encodeURIComponent(imgs[0].path)}&size=150&_ts=${Date.now()}`;
+                    const timestamp = Date.now();
+                    const random = Math.random().toString(36).substring(7);
+                    img.src = `/api/image/preview?path=${encodeURIComponent(imgs[0].path)}&size=150&_ts=${timestamp}&_r=${random}`;
                     img.alt = item.name.replace('📂 ', '');
                     div.appendChild(img);
                     
@@ -416,7 +421,9 @@ class PhotoClusterApp {
                 });
                 
                 const img = document.createElement('img');
-                img.src = `/api/image/preview?path=${encodeURIComponent(item.path)}&size=150&_ts=${Date.now()}`;
+                const timestamp = Date.now();
+                const random = Math.random().toString(36).substring(7);
+                img.src = `/api/image/preview?path=${encodeURIComponent(item.path)}&size=150&_ts=${timestamp}&_r=${random}`;
                 img.alt = item.name.replace('🖼 ', '');
                 div.appendChild(img);
                 
@@ -798,90 +805,6 @@ class PhotoClusterApp {
         }, 1000); // Проверять каждую секунду
     }
 
-    startAutoRefresh() {
-        if (this.autoRefreshTimer) {
-            clearInterval(this.autoRefreshTimer);
-        }
-        
-        if (this.autoRefreshEnabled) {
-            console.log('🔄 Запуск автообновления каждые', this.autoRefreshInterval, 'мс');
-            this.autoRefreshTimer = setInterval(async () => {
-                if (this.currentPath) {
-                    console.log('🔄 Автообновление папки:', this.currentPath);
-                    await this.refreshCurrentFolder();
-                }
-            }, this.autoRefreshInterval);
-        }
-    }
-
-    stopAutoRefresh() {
-        if (this.autoRefreshTimer) {
-            clearInterval(this.autoRefreshTimer);
-            this.autoRefreshTimer = null;
-        }
-    }
-
-    toggleAutoRefresh() {
-        this.autoRefreshEnabled = !this.autoRefreshEnabled;
-        if (this.autoRefreshEnabled) {
-            this.startAutoRefresh();
-        } else {
-            this.stopAutoRefresh();
-        }
-        return this.autoRefreshEnabled;
-    }
-
-    toggleAutoRefreshUI() {
-        const isEnabled = this.toggleAutoRefresh();
-        this.updateAutoRefreshButton(isEnabled);
-        
-        const message = isEnabled ? 'Автообновление включено' : 'Автообновление выключено';
-        this.showNotification(message, 'success');
-    }
-
-    updateAutoRefreshButton(isEnabled) {
-        if (this.autoRefreshBtn) {
-            if (isEnabled) {
-                this.autoRefreshBtn.classList.add('active');
-                this.autoRefreshBtn.innerHTML = '<span>⚡</span> Автообновление';
-            } else {
-                this.autoRefreshBtn.classList.remove('active');
-                this.autoRefreshBtn.innerHTML = '<span>⏸️</span> Автообновление';
-            }
-        }
-    }
-
-    async refreshCurrentFolderSilent() {
-        if (!this.currentPath) {
-            console.log('🔄 Автообновление пропущено: нет текущей папки');
-            return;
-        }
-        
-        try {
-            const response = await fetch(`/api/folder?path=${encodeURIComponent(this.currentPath)}&_ts=${Date.now()}`, { cache: 'no-store' });
-            
-            if (!response.ok) {
-                console.log('🔄 Автообновление пропущено: ошибка ответа', response.status);
-                return; // Молча игнорируем ошибки при автообновлении
-            }
-            
-            const data = await response.json();
-            const newContents = JSON.stringify(data.contents);
-            
-            // Обновляем только если содержимое изменилось
-            if (this.lastFolderContents !== newContents) {
-                console.log('🔄 Содержимое папки изменилось, обновляем UI');
-                this.lastFolderContents = newContents;
-                await this.displayFolderContents(data.contents);
-            } else {
-                console.log('🔄 Содержимое папки не изменилось');
-            }
-            
-        } catch (error) {
-            // Молча игнорируем ошибки при автообновлении
-            console.debug('Auto-refresh error:', error);
-        }
-    }
 
     async clearCompletedTasks() {
         try {
@@ -1117,6 +1040,8 @@ class PhotoClusterApp {
 
     async refreshCurrentFolder() {
         if (this.currentPath) {
+            // Принудительно очищаем кеш и обновляем папку
+            this.lastFolderContents = '';
             await this.navigateToFolder(this.currentPath);
         }
     }
