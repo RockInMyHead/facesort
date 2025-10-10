@@ -191,8 +191,25 @@ class PhotoClusterApp {
     }
 
     async loadInitialData() {
+        await this.checkStatus();
         await this.loadDrives();
         await this.loadQueue();
+    }
+
+    async checkStatus() {
+        try {
+            const response = await fetch('/api/status', { cache: 'no-store' });
+            const status = await response.json();
+            
+            if (!status.insightface_ok) {
+                this.showNotification(status.message, 'error');
+                // Отключаем кнопки обработки
+                this.processBtn.disabled = true;
+                this.processBtn.title = status.message;
+            }
+        } catch (error) {
+            console.error('Ошибка проверки статуса:', error);
+        }
     }
 
     async loadDrives() {

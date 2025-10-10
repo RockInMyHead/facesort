@@ -18,7 +18,11 @@ import tempfile
 import re
 from io import BytesIO
 
-from cluster import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS
+try:
+    from cluster import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS, _INSIGHTFACE_OK
+except ImportError as e:
+    print(f"❌ Ошибка импорта cluster: {e}")
+    _INSIGHTFACE_OK = False
 
 app = FastAPI(title="Кластеризация лиц", description="API для кластеризации лиц и распределения по группам")
 
@@ -153,6 +157,13 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
         print(f"🔍 process_folder_task запущена: {folder_path}, include_excluded={include_excluded}")
         import sys
         sys.stdout.flush()
+        
+        # Проверяем доступность InsightFace
+        if not _INSIGHTFACE_OK:
+            app_state["current_tasks"][task_id]["status"] = "error"
+            app_state["current_tasks"][task_id]["error"] = "InsightFace не доступен. Установите: pip install insightface"
+            app_state["current_tasks"][task_id]["message"] = "❌ InsightFace не доступен"
+            return
         
         app_state["current_tasks"][task_id]["status"] = "running"
         app_state["current_tasks"][task_id]["message"] = "Начинаем обработку..."
@@ -298,6 +309,14 @@ async def get_index():
     """Главная страница"""
     with open("static/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+
+@app.get("/api/status")
+async def get_status():
+    """Получить статус зависимостей"""
+    return {
+        "insightface_ok": _INSIGHTFACE_OK,
+        "message": "InsightFace доступен" if _INSIGHTFACE_OK else "InsightFace не доступен. Установите: pip install insightface"
+    }
 
 @app.get("/api/drives")
 async def get_drives():

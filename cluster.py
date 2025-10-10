@@ -22,7 +22,15 @@ except Exception:
     _NX_OK = False
 
 from sklearn.neighbors import NearestNeighbors  # fallback for kNN
-from insightface.app import FaceAnalysis
+
+# Optional insightface with graceful fallback
+try:
+    from insightface.app import FaceAnalysis
+    _INSIGHTFACE_OK = True
+except Exception as e:
+    print(f"⚠️ InsightFace не доступен: {e}")
+    FaceAnalysis = None
+    _INSIGHTFACE_OK = False
 
 # -------------------------------
 # Config / Defaults
@@ -128,9 +136,19 @@ def extract_embeddings(
       - unreadable: список битых/нечитаемых файлов
       - no_faces: список файлов без пригодных лиц
     """
-    app = FaceAnalysis(name="buffalo_l", providers=list(providers))
-    ctx_id = -1 if "cpu" in str(providers).lower() else 0
-    app.prepare(ctx_id=ctx_id, det_size=det_size)
+    if not _INSIGHTFACE_OK or FaceAnalysis is None:
+        if progress_callback:
+            progress_callback("❌ InsightFace не доступен. Установите: pip install insightface", 0)
+        raise RuntimeError("InsightFace не доступен. Установите: pip install insightface")
+    
+    try:
+        app = FaceAnalysis(name="buffalo_l", providers=list(providers))
+        ctx_id = -1 if "cpu" in str(providers).lower() else 0
+        app.prepare(ctx_id=ctx_id, det_size=det_size)
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"❌ Ошибка инициализации InsightFace: {str(e)}", 0)
+        raise RuntimeError(f"Ошибка инициализации InsightFace: {str(e)}")
 
     if progress_callback:
         progress_callback("✅ Модель загружена, начинаем анализ изображений...", 10)
@@ -199,7 +217,11 @@ def extract_embeddings(
 
     X = np.vstack(embeddings).astype(np.float32)
     # Нормировка для FAISS dot==cos
-    faiss.normalize_L2(X) if _FAISS_OK else None
+    if _FAISS_OK:
+        try:
+            faiss.normalize_L2(X)
+        except Exception as e:
+            print(f"⚠️ Ошибка FAISS нормализации: {e}")
     return X, owners, img_face_count, unreadable, no_faces
 
 
@@ -258,7 +280,11 @@ def build_mutual_edges(
     neigh = sims[:, 1:]
     med = np.median(neigh, axis=1, keepdims=True)
     mad = np.median(np.abs(neigh - med), axis=1, keepdims=True)
-    z = (sims - np.concatenate([np.zeros((N,1),dtype=np.float32), med], axis=1)) / (1.4826*(mad+1e-6))
+    # Исправляем размерности для z-нормализации
+    # med_full должен иметь ту же размерность, что и sims
+    med_full = np.concatenate([np.zeros((N,1),dtype=np.float32), np.tile(med, (1, k-1))], axis=1)
+    mad_full = np.concatenate([np.ones((N,1),dtype=np.float32), np.tile(mad, (1, k-1))], axis=1)
+    z = (sims - med_full) / (1.4826*(mad_full+1e-6))
 
     neighbor_sets = [set(I[i, 1:]) for i in range(N)]
     rank = [{int(I[i, r]): r for r in range(1, I.shape[1])} for i in range(N)]
@@ -499,13 +525,24 @@ def build_plan_live(
         progress_callback(f"📂 Сканируется: {input_dir}, найдено изображений: {len(all_images)}", 1)
 
     # 1) Embeddings
-    X, owners, img_face_count, unreadable, no_faces = extract_embeddings(
-        all_images,
-        providers=providers,
-        det_size=det_size,
-        min_score=min_score,
-        progress_callback=progress_callback,
-    )
+    try:
+        X, owners, img_face_count, unreadable, no_faces = extract_embeddings(
+            all_images,
+            providers=providers,
+            det_size=det_size,
+            min_score=min_score,
+            progress_callback=progress_callback,
+        )
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"❌ Ошибка извлечения эмбеддингов: {str(e)}", 100)
+        return {
+            "clusters": {},
+            "plan": [],
+            "unreadable": [str(p) for p in all_images],
+            "no_faces": [],
+            "error": str(e)
+        }
 
     if X.shape[0] == 0:
         if progress_callback:
