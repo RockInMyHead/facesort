@@ -37,20 +37,20 @@ except Exception as e:
 # -------------------------------
 IMG_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
 
-# Quality gates (консервативные дефолты, ориентированы на максимум precision)
-MIN_DET_SCORE = 0.80
-MIN_BLUR_VAR = 120.0  # var(Laplacian) – грубая оценка резкости
+# Quality gates (оптимизированы для лучшего распознавания)
+MIN_DET_SCORE = 0.50  # Снижено для включения большего количества лиц
+MIN_BLUR_VAR = 50.0   # Снижено для менее строгой фильтрации по резкости
 
-# Hi-Precision graph params (косинусная симметрия на L2-векторах)
-KNN_K = 40
-T_STRICT = 0.80   # ребро создаётся если sim >= T_STRICT и соседство взаимное
-T_MEMBER = 0.78   # фильтр участника относительно медиоида
-T_MERGE = 0.82    # (опционально) порог для слияния кластеров по центроидам
+# Hi-Precision graph params (оптимизированы для точности)
+KNN_K = 60           # Увеличено для лучшего анализа соседства
+T_STRICT = 0.65      # Снижено для более гибкого создания рёбер
+T_MEMBER = 0.60      # Снижено для включения большего количества лиц в кластеры
+T_MERGE = 0.70       # Снижено для лучшего слияния похожих кластеров
 
-# Универсальная адаптация графа (без глобального порога)
-DEGREE_TARGET = (2, 4)   # желаемая средняя степень графа после порога
-MUTUAL_RANK   = 5        # взаимный ранг соседа (оба в TOP-5 друг у друга)
-MIN_SHARED_NEIGHBORS = 4 # минимум общих соседей (по kNN-спискам)
+# Универсальная адаптация графа (оптимизирована)
+DEGREE_TARGET = (3, 8)   # Увеличено для более плотных связей
+MUTUAL_RANK   = 8        # Увеличено для более гибкого взаимного ранга
+MIN_SHARED_NEIGHBORS = 2 # Снижено для более гибкого анализа соседства
 
 # Общие имена для exclude/include
 EXCLUDED_NAMES = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
@@ -142,9 +142,11 @@ def extract_embeddings(
         raise RuntimeError("InsightFace не доступен. Установите: pip install insightface")
     
     try:
+        # Используем более точную модель и настройки
         app = FaceAnalysis(name="buffalo_l", providers=list(providers))
         ctx_id = -1 if "cpu" in str(providers).lower() else 0
-        app.prepare(ctx_id=ctx_id, det_size=det_size)
+        # Увеличиваем размер детекции для лучшего качества
+        app.prepare(ctx_id=ctx_id, det_size=(1024, 1024))
     except Exception as e:
         if progress_callback:
             progress_callback(f"❌ Ошибка инициализации InsightFace: {str(e)}", 0)
@@ -178,17 +180,25 @@ def extract_embeddings(
 
         used = 0
         for f in faces:
-            if getattr(f, "det_score", 1.0) < min_score:
+            # Более мягкая проверка детекции
+            det_score = getattr(f, "det_score", 1.0)
+            if det_score < min_score:
                 continue
-            # Blur check на кропе bbox (грубая оценка)
+                
+            # Улучшенная проверка размытости
             try:
                 x1, y1, x2, y2 = map(int, f.bbox)
                 x1 = max(0, x1); y1 = max(0, y1); x2 = min(img.shape[1], x2); y2 = min(img.shape[0], y2)
                 crop = img[y1:y2, x1:x2]
                 if crop.size == 0:
                     continue
-                if _blur_var(crop) < min_blur_var:
-                    continue
+                    
+                # Более мягкая проверка размытости
+                blur_var = _blur_var(crop)
+                if blur_var < min_blur_var:
+                    # Если лицо очень размытое, но детекция уверенная, все равно включаем
+                    if det_score < 0.7:
+                        continue
             except Exception:
                 # если bbox странный — пропускаем
                 continue
@@ -197,11 +207,16 @@ def extract_embeddings(
             if emb is None:
                 continue
             emb = emb.astype(np.float32)
-            # L2 нормализация (на всякий случай)
+            
+            # Улучшенная нормализация
             n = np.linalg.norm(emb)
             if n <= 0:
                 continue
             emb = emb / n
+            
+            # Дополнительная проверка качества эмбеддинга
+            if np.any(np.isnan(emb)) or np.any(np.isinf(emb)):
+                continue
 
             embeddings.append(emb)
             owners.append(p)
@@ -459,6 +474,48 @@ def optional_merge_by_centroids(
     return merged
 
 
+def post_process_clusters(
+    X: np.ndarray,
+    clusters: List[List[int]],
+    min_cluster_size: int = 2,
+    progress_callback=None,
+) -> List[List[int]]:
+    """Пост-обработка кластеров для улучшения качества"""
+    if not clusters:
+        return clusters
+    
+    if progress_callback:
+        progress_callback("🔧 Пост-обработка кластеров...", 95)
+    
+    processed_clusters = []
+    
+    for cluster in clusters:
+        if len(cluster) < min_cluster_size:
+            # Маленькие кластеры оставляем как есть
+            processed_clusters.append(cluster)
+            continue
+            
+        # Для больших кластеров проверяем внутреннюю согласованность
+        cluster_embeddings = X[cluster]
+        centroid = np.mean(cluster_embeddings, axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) + 1e-12)
+        
+        # Вычисляем расстояния до центроида
+        similarities = np.dot(cluster_embeddings, centroid)
+        
+        # Оставляем только лица с высокой схожестью к центроиду
+        threshold = np.percentile(similarities, 20)  # Оставляем 80% наиболее похожих
+        filtered_indices = [cluster[i] for i, sim in enumerate(similarities) if sim >= threshold]
+        
+        if len(filtered_indices) >= min_cluster_size:
+            processed_clusters.append(filtered_indices)
+        else:
+            # Если после фильтрации кластер стал слишком маленьким, оставляем оригинал
+            processed_clusters.append(cluster)
+    
+    return processed_clusters
+
+
 # -------------------------------
 # High-Precision clustering (end-to-end)
 # -------------------------------
@@ -466,7 +523,7 @@ def optional_merge_by_centroids(
 def hi_precision_cluster(
     X: np.ndarray,
     t_member: float = T_MEMBER,
-    allow_merge: bool = False,
+    allow_merge: bool = True,  # Включаем слияние по умолчанию
     t_merge: float = T_MERGE,
     progress_callback=None,
 ) -> List[List[int]]:
@@ -486,10 +543,13 @@ def hi_precision_cluster(
         progress_callback("🎯 Фильтрация по медиоиду...", 88)
     clusters = filter_by_medoid(X, comps, t_member=t_member)
 
-    if allow_merge:
-        if progress_callback:
-            progress_callback("🧬 Опциональное слияние по центроидам...", 92)
-        clusters = optional_merge_by_centroids(X, clusters, t_merge=t_merge, cluster_attrs=None)
+    # Всегда включаем слияние для лучшего качества
+    if progress_callback:
+        progress_callback("🧬 Слияние похожих кластеров...", 92)
+    clusters = optional_merge_by_centroids(X, clusters, t_merge=t_merge, cluster_attrs=None)
+
+    # Пост-обработка для улучшения качества
+    clusters = post_process_clusters(X, clusters, min_cluster_size=1, progress_callback=progress_callback)
 
     return clusters
 
@@ -499,14 +559,14 @@ def hi_precision_cluster(
 
 def build_plan_live(
     input_dir: Path,
-    det_size=(640, 640),
+    det_size=(1024, 1024),  # Увеличено для лучшего качества
     min_score: float = MIN_DET_SCORE,
-    min_cluster_size: int = 2,  # not used in graph flow; оставлено для совместимости сигнатуры
-    min_samples: int = 2,       # not used
+    min_cluster_size: int = 1,  # Снижено для включения одиночных лиц
+    min_samples: int = 1,       # Снижено для более гибкой кластеризации
     providers: List[str] = ("CPUExecutionProvider",),
     progress_callback=None,
     include_excluded: bool = False,
-    allow_merge: bool = False,
+    allow_merge: bool = True,   # Включаем слияние по умолчанию
     t_strict: float = T_STRICT,
     t_member: float = T_MEMBER,
     t_merge: float = T_MERGE,
@@ -560,7 +620,7 @@ def build_plan_live(
     clusters_idx = hi_precision_cluster(
         X,
         t_member=t_member,
-        allow_merge=allow_merge,
+        allow_merge=True,  # Всегда включаем слияние для лучшего качества
         t_merge=t_merge,
         progress_callback=progress_callback,
     )
