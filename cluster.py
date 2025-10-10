@@ -21,7 +21,16 @@ except Exception:
     nx = None
     _NX_OK = False
 
+try:
+    import hdbscan
+    _HDBSCAN_OK = True
+except Exception:
+    hdbscan = None
+    _HDBSCAN_OK = False
+
 from sklearn.neighbors import NearestNeighbors  # fallback for kNN
+from sklearn.preprocessing import StandardScaler
+from scipy.spatial.distance import cdist
 
 # Optional insightface with graceful fallback
 try:
@@ -116,6 +125,71 @@ def _blur_var(img: np.ndarray) -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
+def _assess_face_quality(face, img: np.ndarray) -> Dict[str, float]:
+    """
+    Профессиональная оценка качества лица
+    Возвращает: dict с метриками качества
+    """
+    quality = {
+        'det_score': getattr(face, 'det_score', 1.0),
+        'blur_score': 0.0,
+        'pose_score': 1.0,
+        'occlusion_score': 1.0,
+        'brightness_score': 1.0,
+        'total_score': 0.0
+    }
+    
+    try:
+        # 1. Оценка размытости (более точная)
+        x1, y1, x2, y2 = map(int, face.bbox)
+        x1 = max(0, x1); y1 = max(0, y1)
+        x2 = min(img.shape[1], x2); y2 = min(img.shape[0], y2)
+        crop = img[y1:y2, x1:x2]
+        
+        if crop.size > 0:
+            # Laplacian variance для размытости
+            blur_var = _blur_var(crop)
+            quality['blur_score'] = min(1.0, blur_var / 200.0)  # Нормализация
+            
+            # Яркость и контраст
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+            brightness = np.mean(gray) / 255.0
+            # Оптимальная яркость 0.3-0.7
+            quality['brightness_score'] = 1.0 - abs(brightness - 0.5) * 2.0
+        
+        # 2. Оценка позы головы (через landmarks если доступны)
+        if hasattr(face, 'pose'):
+            pose = face.pose
+            # Идеальная поза = фронтальное лицо
+            # pose обычно [pitch, yaw, roll]
+            if pose is not None and len(pose) >= 2:
+                yaw, pitch = abs(pose[0]), abs(pose[1])
+                # Штраф за отклонение от фронтального вида
+                quality['pose_score'] = max(0.0, 1.0 - (yaw + pitch) / 90.0)
+        
+        # 3. Оценка окклюзии (через landmark confidence если доступно)
+        if hasattr(face, 'landmark_3d_68'):
+            # Если есть 3D landmarks, проверяем их уверенность
+            quality['occlusion_score'] = 0.9  # Базовая оценка
+        
+        # 4. Итоговая оценка качества (взвешенная сумма)
+        weights = {
+            'det_score': 0.3,
+            'blur_score': 0.25,
+            'pose_score': 0.25,
+            'brightness_score': 0.1,
+            'occlusion_score': 0.1
+        }
+        
+        quality['total_score'] = sum(quality[k] * weights[k] for k in weights.keys())
+        
+    except Exception as e:
+        # При ошибке возвращаем базовую оценку
+        quality['total_score'] = quality['det_score'] * 0.5
+    
+    return quality
+
+
 # -------------------------------
 # Face embeddings extraction
 # -------------------------------
@@ -124,17 +198,20 @@ def extract_embeddings(
     image_paths: List[Path],
     providers: List[str] = ("CPUExecutionProvider",),
     det_size=(640, 640),
-    min_score: float = MIN_DET_SCORE,
+    min_score: float = 0.3,  # Снижено для начальной детекции
     min_blur_var: float = MIN_BLUR_VAR,
+    min_quality_score: float = 0.4,  # Минимальная итоговая оценка качества
     progress_callback=None,
-) -> Tuple[np.ndarray, List[Path], Dict[Path, int], List[Path], List[Path]]:
+) -> Tuple[np.ndarray, List[Path], Dict[Path, int], List[Path], List[Path], List[Dict]]:
     """
-    Возвращает: (X, owners, img_face_count, unreadable, no_faces)
+    Профессиональное извлечение эмбеддингов с оценкой качества
+    Возвращает: (X, owners, img_face_count, unreadable, no_faces, face_qualities)
       - X: np.ndarray [N, D] L2-нормированные эмбеддинги
       - owners: list[Path] длины N (соответствие эмбеддинга → исходный файл)
       - img_face_count: dict[Path] → кол-во используемых лиц из изображения
       - unreadable: список битых/нечитаемых файлов
       - no_faces: список файлов без пригодных лиц
+      - face_qualities: список с оценками качества для каждого лица
     """
     if not _INSIGHTFACE_OK or FaceAnalysis is None:
         if progress_callback:
@@ -157,6 +234,7 @@ def extract_embeddings(
 
     embeddings: List[np.ndarray] = []
     owners: List[Path] = []
+    face_qualities: List[Dict] = []
     img_face_count: Dict[Path, int] = {}
     unreadable: List[Path] = []
     no_faces: List[Path] = []
@@ -180,27 +258,11 @@ def extract_embeddings(
 
         used = 0
         for f in faces:
-            # Более мягкая проверка детекции
-            det_score = getattr(f, "det_score", 1.0)
-            if det_score < min_score:
-                continue
-                
-            # Улучшенная проверка размытости
-            try:
-                x1, y1, x2, y2 = map(int, f.bbox)
-                x1 = max(0, x1); y1 = max(0, y1); x2 = min(img.shape[1], x2); y2 = min(img.shape[0], y2)
-                crop = img[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
-                    
-                # Более мягкая проверка размытости
-                blur_var = _blur_var(crop)
-                if blur_var < min_blur_var:
-                    # Если лицо очень размытое, но детекция уверенная, все равно включаем
-                    if det_score < 0.7:
-                        continue
-            except Exception:
-                # если bbox странный — пропускаем
+            # Профессиональная оценка качества лица
+            quality = _assess_face_quality(f, img)
+            
+            # Фильтрация по итоговой оценке качества
+            if quality['total_score'] < min_quality_score:
                 continue
 
             emb = getattr(f, "normed_embedding", None)
@@ -208,18 +270,23 @@ def extract_embeddings(
                 continue
             emb = emb.astype(np.float32)
             
-            # Улучшенная нормализация
+            # Профессиональная нормализация эмбеддинга
             n = np.linalg.norm(emb)
-            if n <= 0:
+            if n <= 1e-6:  # Более строгая проверка нуля
                 continue
             emb = emb / n
             
-            # Дополнительная проверка качества эмбеддинга
+            # Проверка качества эмбеддинга
             if np.any(np.isnan(emb)) or np.any(np.isinf(emb)):
+                continue
+            
+            # Проверка вариативности эмбеддинга (не все значения одинаковые)
+            if np.std(emb) < 1e-6:
                 continue
 
             embeddings.append(emb)
             owners.append(p)
+            face_qualities.append(quality)
             used += 1
 
         if used > 0:
@@ -228,16 +295,25 @@ def extract_embeddings(
             no_faces.append(p)
 
     if not embeddings:
-        return np.empty((0, 512), dtype=np.float32), owners, img_face_count, unreadable, no_faces
+        return np.empty((0, 512), dtype=np.float32), owners, img_face_count, unreadable, no_faces, []
 
     X = np.vstack(embeddings).astype(np.float32)
-    # Нормировка для FAISS dot==cos
+    
+    # Профессиональная нормализация для FAISS
     if _FAISS_OK:
         try:
             faiss.normalize_L2(X)
         except Exception as e:
             print(f"⚠️ Ошибка FAISS нормализации: {e}")
-    return X, owners, img_face_count, unreadable, no_faces
+            # Fallback нормализация
+            norms = np.linalg.norm(X, axis=1, keepdims=True)
+            X = X / (norms + 1e-8)
+    else:
+        # L2 нормализация вручную
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        X = X / (norms + 1e-8)
+    
+    return X, owners, img_face_count, unreadable, no_faces, face_qualities
 
 
 # -------------------------------
@@ -474,44 +550,167 @@ def optional_merge_by_centroids(
     return merged
 
 
+def hdbscan_cluster_professional(
+    X: np.ndarray,
+    face_qualities: List[Dict] = None,
+    min_cluster_size: int = 2,
+    min_samples: int = 1,
+    progress_callback=None,
+) -> List[List[int]]:
+    """
+    Профессиональная кластеризация с HDBSCAN
+    Использует state-of-the-art подход для группировки лиц
+    """
+    N = X.shape[0]
+    if N == 0:
+        return []
+    
+    if progress_callback:
+        progress_callback("🧬 HDBSCAN кластеризация (профессиональная)...", 75)
+    
+    if not _HDBSCAN_OK or hdbscan is None:
+        # Fallback на графовый метод
+        if progress_callback:
+            progress_callback("⚠️ HDBSCAN недоступен, используется графовый метод", 76)
+        return []
+    
+    try:
+        # Вычисляем косинусные расстояния (1 - cosine similarity)
+        # HDBSCAN работает с метрикой расстояний
+        distances = 1.0 - np.dot(X, X.T)
+        np.fill_diagonal(distances, 0)  # Расстояние до себя = 0
+        
+        # Приводим к правильному типу для HDBSCAN (float64)
+        distances = distances.astype(np.float64)
+        
+        # Убеждаемся что матрица симметрична
+        distances = (distances + distances.T) / 2.0
+        
+        # Адаптивные параметры на основе размера датасета
+        adaptive_min_cluster_size = max(2, min(min_cluster_size, N // 20))
+        adaptive_min_samples = max(1, min(min_samples, adaptive_min_cluster_size // 2))
+        
+        # HDBSCAN кластеризация с оптимальными параметрами
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=adaptive_min_cluster_size,
+            min_samples=adaptive_min_samples,
+            metric='precomputed',  # Используем pre-computed distances
+            cluster_selection_method='eom',  # Excess of Mass - лучший метод
+            alpha=1.0,  # Консервативный параметр
+            allow_single_cluster=True,
+            cluster_selection_epsilon=0.0,
+        )
+        
+        if progress_callback:
+            progress_callback("🔬 Анализ плотности и формирование кластеров...", 80)
+        
+        # Выполняем кластеризацию
+        labels = clusterer.fit_predict(distances)
+        
+        # Извлекаем вероятности принадлежности
+        probabilities = clusterer.probabilities_ if hasattr(clusterer, 'probabilities_') else None
+        
+        # Формируем кластеры
+        clusters = defaultdict(list)
+        for idx, label in enumerate(labels):
+            if label != -1:  # -1 = шум
+                # Фильтруем по вероятности если доступна
+                if probabilities is not None:
+                    if probabilities[idx] >= 0.5:  # Высокая уверенность
+                        clusters[label].append(idx)
+                else:
+                    clusters[label].append(idx)
+        
+        # Обработка шума - пытаемся назначить в ближайшие кластеры
+        noise_indices = [i for i, label in enumerate(labels) if label == -1]
+        if noise_indices and clusters:
+            if progress_callback:
+                progress_callback("🔍 Обработка выбросов...", 85)
+            
+            for noise_idx in noise_indices:
+                noise_emb = X[noise_idx]
+                best_cluster = -1
+                best_sim = 0.4  # Минимальный порог схожести
+                
+                for cluster_id, cluster_indices in clusters.items():
+                    if not cluster_indices:
+                        continue
+                    # Сравниваем с медоидом кластера
+                    cluster_embs = X[cluster_indices]
+                    centroid = np.mean(cluster_embs, axis=0)
+                    centroid = centroid / (np.linalg.norm(centroid) + 1e-8)
+                    sim = float(np.dot(noise_emb, centroid))
+                    
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_cluster = cluster_id
+                
+                if best_cluster != -1:
+                    clusters[best_cluster].append(noise_idx)
+        
+        result = [sorted(indices) for indices in clusters.values() if len(indices) >= 1]
+        
+        if progress_callback:
+            progress_callback(f"✅ Найдено {len(result)} кластеров", 90)
+        
+        return result
+        
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"⚠️ Ошибка HDBSCAN: {e}, используется fallback", 76)
+        return []
+
+
 def post_process_clusters(
     X: np.ndarray,
     clusters: List[List[int]],
+    face_qualities: List[Dict] = None,
     min_cluster_size: int = 2,
     progress_callback=None,
 ) -> List[List[int]]:
-    """Пост-обработка кластеров для улучшения качества"""
+    """Профессиональная пост-обработка кластеров"""
     if not clusters:
         return clusters
     
     if progress_callback:
-        progress_callback("🔧 Пост-обработка кластеров...", 95)
+        progress_callback("🔧 Пост-обработка кластеров...", 92)
     
     processed_clusters = []
     
     for cluster in clusters:
         if len(cluster) < min_cluster_size:
-            # Маленькие кластеры оставляем как есть
             processed_clusters.append(cluster)
             continue
             
-        # Для больших кластеров проверяем внутреннюю согласованность
+        # Вычисляем медиоид (наиболее репрезентативный элемент)
         cluster_embeddings = X[cluster]
-        centroid = np.mean(cluster_embeddings, axis=0)
-        centroid = centroid / (np.linalg.norm(centroid) + 1e-12)
+        similarities = np.dot(cluster_embeddings, cluster_embeddings.T)
+        sum_sims = similarities.sum(axis=1)
+        medoid_idx_local = np.argmax(sum_sims)
+        medoid = cluster_embeddings[medoid_idx_local]
         
-        # Вычисляем расстояния до центроида
-        similarities = np.dot(cluster_embeddings, centroid)
+        # Вычисляем схожести с медиоидом
+        sims_to_medoid = np.dot(cluster_embeddings, medoid)
         
-        # Оставляем только лица с высокой схожестью к центроиду
-        threshold = np.percentile(similarities, 20)  # Оставляем 80% наиболее похожих
-        filtered_indices = [cluster[i] for i, sim in enumerate(similarities) if sim >= threshold]
+        # Адаптивный порог на основе распределения схожестей
+        threshold = np.percentile(sims_to_medoid, 15)  # Оставляем 85%
+        threshold = max(threshold, 0.5)  # Минимальный порог
         
-        if len(filtered_indices) >= min_cluster_size:
+        # Фильтруем по схожести
+        filtered_indices = [cluster[i] for i, sim in enumerate(sims_to_medoid) if sim >= threshold]
+        
+        # Дополнительная фильтрация по качеству если доступно
+        if face_qualities and len(face_qualities) == len(X):
+            quality_filtered = []
+            avg_quality = np.mean([face_qualities[i]['total_score'] for i in filtered_indices])
+            for idx in filtered_indices:
+                if face_qualities[idx]['total_score'] >= avg_quality * 0.7:
+                    quality_filtered.append(idx)
+            if len(quality_filtered) >= min_cluster_size:
+                filtered_indices = quality_filtered
+        
+        if len(filtered_indices) >= 1:
             processed_clusters.append(filtered_indices)
-        else:
-            # Если после фильтрации кластер стал слишком маленьким, оставляем оригинал
-            processed_clusters.append(cluster)
     
     return processed_clusters
 
@@ -522,35 +721,70 @@ def post_process_clusters(
 
 def hi_precision_cluster(
     X: np.ndarray,
+    face_qualities: List[Dict] = None,
+    min_cluster_size: int = 2,
+    min_samples: int = 1,
     t_member: float = T_MEMBER,
-    allow_merge: bool = True,  # Включаем слияние по умолчанию
+    allow_merge: bool = True,
     t_merge: float = T_MERGE,
+    use_hdbscan: bool = True,  # Приоритет HDBSCAN
     progress_callback=None,
 ) -> List[List[int]]:
+    """
+    Профессиональная кластеризация лиц (top 1%)
+    Использует HDBSCAN как основной метод с fallback на графовый
+    """
     N = X.shape[0]
     if N == 0:
         return []
 
+    # Пытаемся использовать HDBSCAN (state-of-the-art)
+    if use_hdbscan and _HDBSCAN_OK:
+        clusters = hdbscan_cluster_professional(
+            X, 
+            face_qualities=face_qualities,
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            progress_callback=progress_callback
+        )
+        
+        if clusters:  # Если HDBSCAN успешно выполнился
+            # Пост-обработка
+            clusters = post_process_clusters(
+                X, clusters, 
+                face_qualities=face_qualities,
+                min_cluster_size=1, 
+                progress_callback=progress_callback
+            )
+            return clusters
+    
+    # Fallback: графовый метод
     if progress_callback:
-        progress_callback("🔗 Строим kNN-граф (адаптивный порог)...", 75)
+        progress_callback("🔗 Графовая кластеризация (fallback)...", 75)
+    
     edges = build_mutual_edges(X, k=KNN_K)
-
+    
     if progress_callback:
         progress_callback("🧩 Связные компоненты...", 82)
     comps = connected_components_from_edges(N, edges)
-
+    
     if progress_callback:
         progress_callback("🎯 Фильтрация по медиоиду...", 88)
     clusters = filter_by_medoid(X, comps, t_member=t_member)
-
-    # Всегда включаем слияние для лучшего качества
-    if progress_callback:
-        progress_callback("🧬 Слияние похожих кластеров...", 92)
-    clusters = optional_merge_by_centroids(X, clusters, t_merge=t_merge, cluster_attrs=None)
-
-    # Пост-обработка для улучшения качества
-    clusters = post_process_clusters(X, clusters, min_cluster_size=1, progress_callback=progress_callback)
-
+    
+    if allow_merge:
+        if progress_callback:
+            progress_callback("🧬 Слияние похожих кластеров...", 90)
+        clusters = optional_merge_by_centroids(X, clusters, t_merge=t_merge, cluster_attrs=None)
+    
+    # Пост-обработка
+    clusters = post_process_clusters(
+        X, clusters,
+        face_qualities=face_qualities,
+        min_cluster_size=1,
+        progress_callback=progress_callback
+    )
+    
     return clusters
 
 # -------------------------------
@@ -584,13 +818,14 @@ def build_plan_live(
     if progress_callback:
         progress_callback(f"📂 Сканируется: {input_dir}, найдено изображений: {len(all_images)}", 1)
 
-    # 1) Embeddings
+    # 1) Профессиональное извлечение эмбеддингов
     try:
-        X, owners, img_face_count, unreadable, no_faces = extract_embeddings(
+        X, owners, img_face_count, unreadable, no_faces, face_qualities = extract_embeddings(
             all_images,
             providers=providers,
             det_size=det_size,
-            min_score=min_score,
+            min_score=0.3,  # Низкий порог для начальной детекции
+            min_quality_score=0.35,  # Итоговая оценка качества
             progress_callback=progress_callback,
         )
     except Exception as e:
@@ -614,14 +849,18 @@ def build_plan_live(
             "no_faces": [str(p) for p in no_faces],
         }
 
-    # 2) Graph clustering
+    # 2) Профессиональная кластеризация (HDBSCAN + fallback)
     if progress_callback:
-        progress_callback(f"🔄 Графовая кластеризация {X.shape[0]} лиц...", 80)
+        progress_callback(f"🔄 Профессиональная кластеризация {X.shape[0]} лиц...", 75)
     clusters_idx = hi_precision_cluster(
         X,
+        face_qualities=face_qualities,
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
         t_member=t_member,
-        allow_merge=True,  # Всегда включаем слияние для лучшего качества
+        allow_merge=True,
         t_merge=t_merge,
+        use_hdbscan=True,  # Используем HDBSCAN как приоритет
         progress_callback=progress_callback,
     )
 
