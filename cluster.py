@@ -28,9 +28,27 @@ except Exception:
     hdbscan = None
     _HDBSCAN_OK = False
 
+try:
+    from sklearn.cluster import SpectralClustering, AgglomerativeClustering, DBSCAN
+    from sklearn.mixture import GaussianMixture
+    from sklearn.ensemble import IsolationForest
+    _SKLEARN_ADVANCED_OK = True
+except Exception:
+    _SKLEARN_ADVANCED_OK = False
+
+try:
+    from sklearn.manifold import TSNE, UMAP
+    _MANIFOLD_OK = True
+except Exception:
+    _MANIFOLD_OK = False
+
 from sklearn.neighbors import NearestNeighbors  # fallback for kNN
 from sklearn.preprocessing import StandardScaler
-from scipy.spatial.distance import cdist
+from scipy.spatial.distance import cdist, pdist, squareform
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.optimize import minimize
+import warnings
+warnings.filterwarnings('ignore')
 
 # Optional insightface with graceful fallback
 try:
@@ -123,6 +141,304 @@ def _blur_var(img: np.ndarray) -> float:
     except Exception:
         return 0.0
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def _extract_advanced_features(X: np.ndarray, face_qualities: List[Dict] = None) -> np.ndarray:
+    """
+    Извлечение продвинутых признаков для улучшения кластеризации
+    """
+    N, D = X.shape
+    features = []
+    
+    # 1. Оригинальные эмбеддинги
+    features.append(X)
+    
+    # 2. Статистические признаки
+    # Среднее, std, min, max по каждому измерению
+    stats_features = np.column_stack([
+        np.mean(X, axis=1),
+        np.std(X, axis=1),
+        np.min(X, axis=1),
+        np.max(X, axis=1),
+        np.median(X, axis=1)
+    ])
+    features.append(stats_features)
+    
+    # 3. Расстояния до центроидов
+    centroid = np.mean(X, axis=0)
+    centroid_dist = np.linalg.norm(X - centroid, axis=1, keepdims=True)
+    features.append(centroid_dist)
+    
+    # 4. Локальные плотности (kNN distances)
+    if N > 5:
+        try:
+            nbrs = NearestNeighbors(n_neighbors=min(5, N-1), metric='cosine')
+            nbrs.fit(X)
+            distances, _ = nbrs.kneighbors(X)
+            local_density = np.mean(distances[:, 1:], axis=1, keepdims=True)  # Исключаем расстояние до себя
+            features.append(local_density)
+        except:
+            pass
+    
+    # 5. Качество лиц как признаки
+    if face_qualities and len(face_qualities) == N:
+        quality_features = np.array([
+            [q.get('total_score', 0.5), q.get('blur_score', 0.5), 
+             q.get('pose_score', 0.5), q.get('brightness_score', 0.5)]
+            for q in face_qualities
+        ])
+        features.append(quality_features)
+    
+    # Объединяем все признаки
+    if features:
+        combined_features = np.hstack(features)
+        # Нормализация признаков
+        scaler = StandardScaler()
+        combined_features = scaler.fit_transform(combined_features)
+        return combined_features
+    
+    return X
+
+
+def _ensemble_clustering_advanced(
+    X: np.ndarray,
+    face_qualities: List[Dict] = None,
+    progress_callback=None,
+) -> List[List[int]]:
+    """
+    Продвинутый ensemble кластеризации с множественными алгоритмами
+    """
+    N = X.shape[0]
+    if N < 2:
+        return [[0]] if N == 1 else []
+    
+    if progress_callback:
+        progress_callback("🧠 Продвинутый ensemble кластеризации...", 75)
+    
+    # Извлекаем продвинутые признаки
+    X_enhanced = _extract_advanced_features(X, face_qualities)
+    
+    clustering_results = []
+    weights = []
+    
+    # 1. HDBSCAN с разными параметрами
+    if _HDBSCAN_OK and hdbscan is not None:
+        try:
+            if progress_callback:
+                progress_callback("🔬 HDBSCAN ensemble...", 76)
+            
+            # Разные конфигурации HDBSCAN
+            hdbscan_configs = [
+                {'min_cluster_size': max(2, N//20), 'min_samples': 1, 'alpha': 1.0},
+                {'min_cluster_size': max(2, N//15), 'min_samples': 2, 'alpha': 1.5},
+                {'min_cluster_size': max(2, N//10), 'min_samples': 1, 'alpha': 0.5},
+            ]
+            
+            for config in hdbscan_configs:
+                try:
+                    distances = 1.0 - np.dot(X, X.T)
+                    distances = distances.astype(np.float64)
+                    distances = (distances + distances.T) / 2.0
+                    
+                    clusterer = hdbscan.HDBSCAN(
+                        metric='precomputed',
+                        cluster_selection_method='eom',
+                        allow_single_cluster=True,
+                        **config
+                    )
+                    
+                    labels = clusterer.fit_predict(distances)
+                    clusters = _labels_to_clusters(labels)
+                    if clusters:
+                        clustering_results.append(clusters)
+                        weights.append(0.3)  # Высокий вес для HDBSCAN
+                except:
+                    continue
+        except:
+            pass
+    
+    # 2. Spectral Clustering
+    if _SKLEARN_ADVANCED_OK and N >= 3:
+        try:
+            if progress_callback:
+                progress_callback("🌈 Спектральная кластеризация...", 78)
+            
+            # Разные количества кластеров
+            n_clusters_options = [max(2, N//10), max(2, N//5), max(2, N//3)]
+            
+            for n_clusters in n_clusters_options:
+                if n_clusters >= N:
+                    continue
+                    
+                try:
+                    spectral = SpectralClustering(
+                        n_clusters=n_clusters,
+                        affinity='cosine',
+                        assign_labels='kmeans',
+                        random_state=42
+                    )
+                    labels = spectral.fit_predict(X)
+                    clusters = _labels_to_clusters(labels)
+                    if clusters:
+                        clustering_results.append(clusters)
+                        weights.append(0.2)
+                except:
+                    continue
+        except:
+            pass
+    
+    # 3. Agglomerative Clustering
+    if _SKLEARN_ADVANCED_OK and N >= 3:
+        try:
+            if progress_callback:
+                progress_callback("🌳 Иерархическая кластеризация...", 80)
+            
+            # Разные linkage методы
+            linkage_methods = ['ward', 'complete', 'average']
+            
+            for linkage_method in linkage_methods:
+                try:
+                    n_clusters = max(2, min(N//5, 10))
+                    agglo = AgglomerativeClustering(
+                        n_clusters=n_clusters,
+                        linkage=linkage_method,
+                        metric='cosine'
+                    )
+                    labels = agglo.fit_predict(X)
+                    clusters = _labels_to_clusters(labels)
+                    if clusters:
+                        clustering_results.append(clusters)
+                        weights.append(0.15)
+                except:
+                    continue
+        except:
+            pass
+    
+    # 4. Gaussian Mixture Models
+    if _SKLEARN_ADVANCED_OK and N >= 3:
+        try:
+            if progress_callback:
+                progress_callback("🎯 Gaussian Mixture Models...", 82)
+            
+            n_components_options = [max(2, N//15), max(2, N//8), max(2, N//4)]
+            
+            for n_components in n_components_options:
+                if n_components >= N:
+                    continue
+                    
+                try:
+                    gmm = GaussianMixture(
+                        n_components=n_components,
+                        covariance_type='full',
+                        random_state=42,
+                        max_iter=100
+                    )
+                    labels = gmm.fit_predict(X_enhanced)
+                    clusters = _labels_to_clusters(labels)
+                    if clusters:
+                        clustering_results.append(clusters)
+                        weights.append(0.1)
+                except:
+                    continue
+        except:
+            pass
+    
+    # 5. Consensus Clustering
+    if len(clustering_results) >= 2:
+        if progress_callback:
+            progress_callback("🤝 Consensus кластеризация...", 85)
+        
+        try:
+            consensus_clusters = _consensus_clustering(clustering_results, weights, N)
+            if consensus_clusters:
+                return consensus_clusters
+        except:
+            pass
+    
+    # Fallback: возвращаем лучший результат
+    if clustering_results:
+        # Выбираем результат с наибольшим весом
+        best_idx = np.argmax(weights)
+        return clustering_results[best_idx]
+    
+    return []
+
+
+def _labels_to_clusters(labels: np.ndarray) -> List[List[int]]:
+    """Конвертирует labels в список кластеров"""
+    clusters = defaultdict(list)
+    for idx, label in enumerate(labels):
+        if label != -1:  # Игнорируем шум
+            clusters[label].append(idx)
+    
+    return [sorted(cluster) for cluster in clusters.values() if len(cluster) >= 1]
+
+
+def _consensus_clustering(
+    clustering_results: List[List[List[int]]],
+    weights: List[float],
+    N: int,
+) -> List[List[int]]:
+    """
+    Consensus кластеризация - объединение результатов разных алгоритмов
+    """
+    if not clustering_results:
+        return []
+    
+    # Создаем матрицу сходства
+    similarity_matrix = np.zeros((N, N))
+    
+    for clusters, weight in zip(clustering_results, weights):
+        for cluster in clusters:
+            for i in cluster:
+                for j in cluster:
+                    if i != j:
+                        similarity_matrix[i, j] += weight
+    
+    # Нормализуем
+    max_sim = similarity_matrix.max()
+    if max_sim > 0:
+        similarity_matrix = similarity_matrix / max_sim
+    
+    # Применяем пороговую кластеризацию
+    threshold = 0.5  # Порог для consensus
+    consensus_edges = similarity_matrix >= threshold
+    
+    # Находим связные компоненты
+    if _NX_OK and nx is not None:
+        G = nx.Graph()
+        G.add_nodes_from(range(N))
+        for i in range(N):
+            for j in range(i+1, N):
+                if consensus_edges[i, j]:
+                    G.add_edge(i, j)
+        
+        components = list(nx.connected_components(G))
+        return [sorted(list(comp)) for comp in components if len(comp) >= 1]
+    else:
+        # Простая реализация без NetworkX
+        visited = [False] * N
+        clusters = []
+        
+        for i in range(N):
+            if not visited[i]:
+                cluster = []
+                stack = [i]
+                
+                while stack:
+                    node = stack.pop()
+                    if not visited[node]:
+                        visited[node] = True
+                        cluster.append(node)
+                        
+                        for j in range(N):
+                            if not visited[j] and consensus_edges[node, j]:
+                                stack.append(j)
+                
+                if len(cluster) >= 1:
+                    clusters.append(sorted(cluster))
+        
+        return clusters
 
 
 def _assess_face_quality(face, img: np.ndarray) -> Dict[str, float]:
@@ -727,29 +1043,27 @@ def hi_precision_cluster(
     t_member: float = T_MEMBER,
     allow_merge: bool = True,
     t_merge: float = T_MERGE,
-    use_hdbscan: bool = True,  # Приоритет HDBSCAN
+    use_advanced_ensemble: bool = True,  # Приоритет продвинутому ensemble
     progress_callback=None,
 ) -> List[List[int]]:
     """
-    Профессиональная кластеризация лиц (top 1%)
-    Использует HDBSCAN как основной метод с fallback на графовый
+    Продвинутая кластеризация лиц (максимальная точность)
+    Использует ensemble из множественных state-of-the-art алгоритмов
     """
     N = X.shape[0]
     if N == 0:
         return []
 
-    # Пытаемся использовать HDBSCAN (state-of-the-art)
-    if use_hdbscan and _HDBSCAN_OK:
-        clusters = hdbscan_cluster_professional(
+    # Приоритет: продвинутый ensemble кластеризации
+    if use_advanced_ensemble:
+        clusters = _ensemble_clustering_advanced(
             X, 
             face_qualities=face_qualities,
-            min_cluster_size=min_cluster_size,
-            min_samples=min_samples,
             progress_callback=progress_callback
         )
         
-        if clusters:  # Если HDBSCAN успешно выполнился
-            # Пост-обработка
+        if clusters:  # Если ensemble успешно выполнился
+            # Продвинутая пост-обработка
             clusters = post_process_clusters(
                 X, clusters, 
                 face_qualities=face_qualities,
@@ -758,7 +1072,29 @@ def hi_precision_cluster(
             )
             return clusters
     
-    # Fallback: графовый метод
+    # Fallback 1: HDBSCAN
+    if _HDBSCAN_OK:
+        if progress_callback:
+            progress_callback("🔬 HDBSCAN fallback...", 75)
+        
+        clusters = hdbscan_cluster_professional(
+            X, 
+            face_qualities=face_qualities,
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            progress_callback=progress_callback
+        )
+        
+        if clusters:
+            clusters = post_process_clusters(
+                X, clusters, 
+                face_qualities=face_qualities,
+                min_cluster_size=1, 
+                progress_callback=progress_callback
+            )
+            return clusters
+    
+    # Fallback 2: графовый метод
     if progress_callback:
         progress_callback("🔗 Графовая кластеризация (fallback)...", 75)
     
@@ -849,9 +1185,9 @@ def build_plan_live(
             "no_faces": [str(p) for p in no_faces],
         }
 
-    # 2) Профессиональная кластеризация (HDBSCAN + fallback)
+    # 2) Продвинутая кластеризация (Ensemble + HDBSCAN + fallback)
     if progress_callback:
-        progress_callback(f"🔄 Профессиональная кластеризация {X.shape[0]} лиц...", 75)
+        progress_callback(f"🔄 Продвинутая кластеризация {X.shape[0]} лиц...", 75)
     clusters_idx = hi_precision_cluster(
         X,
         face_qualities=face_qualities,
@@ -860,7 +1196,7 @@ def build_plan_live(
         t_member=t_member,
         allow_merge=True,
         t_merge=t_merge,
-        use_hdbscan=True,  # Используем HDBSCAN как приоритет
+        use_advanced_ensemble=True,  # Используем продвинутый ensemble как приоритет
         progress_callback=progress_callback,
     )
 
