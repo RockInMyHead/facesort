@@ -227,11 +227,11 @@ def _ensemble_clustering_advanced(
             if progress_callback:
                 progress_callback("🔬 HDBSCAN ensemble...", 76)
             
-            # Разные конфигурации HDBSCAN
+            # Более консервативные конфигурации HDBSCAN
             hdbscan_configs = [
-                {'min_cluster_size': max(2, N//20), 'min_samples': 1, 'alpha': 1.0},
-                {'min_cluster_size': max(2, N//15), 'min_samples': 2, 'alpha': 1.5},
-                {'min_cluster_size': max(2, N//10), 'min_samples': 1, 'alpha': 0.5},
+                {'min_cluster_size': max(2, N//10), 'min_samples': 1, 'alpha': 1.0},
+                {'min_cluster_size': max(2, N//8), 'min_samples': 1, 'alpha': 1.2},
+                {'min_cluster_size': max(2, N//6), 'min_samples': 2, 'alpha': 0.8},
             ]
             
             for config in hdbscan_configs:
@@ -263,8 +263,8 @@ def _ensemble_clustering_advanced(
             if progress_callback:
                 progress_callback("🌈 Спектральная кластеризация...", 78)
             
-            # Разные количества кластеров
-            n_clusters_options = [max(2, N//10), max(2, N//5), max(2, N//3)]
+            # Более консервативные количества кластеров
+            n_clusters_options = [max(2, N//8), max(2, N//6), max(2, N//4)]
             
             for n_clusters in n_clusters_options:
                 if n_clusters >= N:
@@ -298,7 +298,7 @@ def _ensemble_clustering_advanced(
             
             for linkage_method in linkage_methods:
                 try:
-                    n_clusters = max(2, min(N//5, 10))
+                    n_clusters = max(2, min(N//4, 8))  # Более консервативно
                     agglo = AgglomerativeClustering(
                         n_clusters=n_clusters,
                         linkage=linkage_method,
@@ -320,7 +320,7 @@ def _ensemble_clustering_advanced(
             if progress_callback:
                 progress_callback("🎯 Gaussian Mixture Models...", 82)
             
-            n_components_options = [max(2, N//15), max(2, N//8), max(2, N//4)]
+            n_components_options = [max(2, N//12), max(2, N//8), max(2, N//6)]
             
             for n_components in n_components_options:
                 if n_components >= N:
@@ -346,10 +346,10 @@ def _ensemble_clustering_advanced(
     # 5. Consensus Clustering
     if len(clustering_results) >= 2:
         if progress_callback:
-            progress_callback("🤝 Consensus кластеризация...", 85)
+            progress_callback("🤝 Умная consensus кластеризация...", 85)
         
         try:
-            consensus_clusters = _consensus_clustering(clustering_results, weights, N)
+            consensus_clusters = _consensus_clustering(clustering_results, weights, N, X)
             if consensus_clusters:
                 return consensus_clusters
         except:
@@ -378,9 +378,10 @@ def _consensus_clustering(
     clustering_results: List[List[List[int]]],
     weights: List[float],
     N: int,
+    X: np.ndarray = None,
 ) -> List[List[int]]:
     """
-    Consensus кластеризация - объединение результатов разных алгоритмов
+    Умная consensus кластеризация с валидацией и слиянием
     """
     if not clustering_results:
         return []
@@ -400,8 +401,18 @@ def _consensus_clustering(
     if max_sim > 0:
         similarity_matrix = similarity_matrix / max_sim
     
-    # Применяем пороговую кластеризацию
-    threshold = 0.5  # Порог для consensus
+    # Адаптивный порог на основе распределения сходства
+    if X is not None:
+        # Вычисляем косинусные сходства для валидации
+        cosine_sims = np.dot(X, X.T)
+        np.fill_diagonal(cosine_sims, 0)
+        
+        # Адаптивный порог на основе квантилей
+        threshold = np.percentile(similarity_matrix[similarity_matrix > 0], 30)  # 30-й процентиль
+        threshold = max(threshold, 0.3)  # Минимальный порог
+    else:
+        threshold = 0.4  # Более консервативный порог
+    
     consensus_edges = similarity_matrix >= threshold
     
     # Находим связные компоненты
@@ -414,7 +425,7 @@ def _consensus_clustering(
                     G.add_edge(i, j)
         
         components = list(nx.connected_components(G))
-        return [sorted(list(comp)) for comp in components if len(comp) >= 1]
+        clusters = [sorted(list(comp)) for comp in components if len(comp) >= 1]
     else:
         # Простая реализация без NetworkX
         visited = [False] * N
@@ -437,8 +448,58 @@ def _consensus_clustering(
                 
                 if len(cluster) >= 1:
                     clusters.append(sorted(cluster))
-        
+    
+    # Умное слияние похожих кластеров
+    if X is not None and len(clusters) > 1:
+        clusters = _smart_merge_clusters(X, clusters)
+    
+    return clusters
+
+
+def _smart_merge_clusters(X: np.ndarray, clusters: List[List[int]]) -> List[List[int]]:
+    """
+    Умное слияние похожих кластеров на основе косинусного сходства
+    """
+    if len(clusters) <= 1:
         return clusters
+    
+    # Вычисляем центроиды кластеров
+    centroids = []
+    for cluster in clusters:
+        cluster_embeddings = X[cluster]
+        centroid = np.mean(cluster_embeddings, axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) + 1e-8)
+        centroids.append(centroid)
+    
+    # Находим пары кластеров для слияния
+    merged_clusters = []
+    used = [False] * len(clusters)
+    
+    for i in range(len(clusters)):
+        if used[i]:
+            continue
+            
+        current_cluster = clusters[i].copy()
+        used[i] = True
+        
+        # Ищем похожие кластеры для слияния
+        for j in range(i + 1, len(clusters)):
+            if used[j]:
+                continue
+                
+            # Вычисляем сходство центроидов
+            similarity = float(np.dot(centroids[i], centroids[j]))
+            
+            # Более агрессивный порог для слияния
+            merge_threshold = 0.65  # Снижен порог для лучшего слияния
+            
+            if similarity >= merge_threshold:
+                current_cluster.extend(clusters[j])
+                used[j] = True
+        
+        merged_clusters.append(sorted(current_cluster))
+    
+    return merged_clusters
 
 
 def _assess_face_quality(face, img: np.ndarray) -> Dict[str, float]:
@@ -984,12 +1045,12 @@ def post_process_clusters(
     min_cluster_size: int = 2,
     progress_callback=None,
 ) -> List[List[int]]:
-    """Профессиональная пост-обработка кластеров"""
+    """Умная пост-обработка кластеров с валидацией"""
     if not clusters:
         return clusters
     
     if progress_callback:
-        progress_callback("🔧 Пост-обработка кластеров...", 92)
+        progress_callback("🔧 Умная пост-обработка кластеров...", 92)
     
     processed_clusters = []
     
@@ -1008,9 +1069,9 @@ def post_process_clusters(
         # Вычисляем схожести с медиоидом
         sims_to_medoid = np.dot(cluster_embeddings, medoid)
         
-        # Адаптивный порог на основе распределения схожестей
-        threshold = np.percentile(sims_to_medoid, 15)  # Оставляем 85%
-        threshold = max(threshold, 0.5)  # Минимальный порог
+        # Более консервативный порог для сохранения кластеров
+        threshold = np.percentile(sims_to_medoid, 25)  # Оставляем 75% (было 85%)
+        threshold = max(threshold, 0.4)  # Снижен минимальный порог (было 0.5)
         
         # Фильтруем по схожести
         filtered_indices = [cluster[i] for i, sim in enumerate(sims_to_medoid) if sim >= threshold]
@@ -1020,7 +1081,7 @@ def post_process_clusters(
             quality_filtered = []
             avg_quality = np.mean([face_qualities[i]['total_score'] for i in filtered_indices])
             for idx in filtered_indices:
-                if face_qualities[idx]['total_score'] >= avg_quality * 0.7:
+                if face_qualities[idx]['total_score'] >= avg_quality * 0.6:  # Снижен порог (было 0.7)
                     quality_filtered.append(idx)
             if len(quality_filtered) >= min_cluster_size:
                 filtered_indices = quality_filtered
@@ -1028,7 +1089,58 @@ def post_process_clusters(
         if len(filtered_indices) >= 1:
             processed_clusters.append(filtered_indices)
     
+    # Дополнительное слияние похожих кластеров
+    if len(processed_clusters) > 1:
+        processed_clusters = _smart_merge_clusters(X, processed_clusters)
+    
+    # Финальная валидация: предотвращение over-clustering
+    if len(processed_clusters) > max(1, len(X) // 3):  # Максимум N/3 кластеров
+        processed_clusters = _aggressive_merge_clusters(X, processed_clusters)
+    
     return processed_clusters
+
+
+def _aggressive_merge_clusters(X: np.ndarray, clusters: List[List[int]]) -> List[List[int]]:
+    """
+    Агрессивное слияние кластеров для предотвращения over-clustering
+    """
+    if len(clusters) <= 1:
+        return clusters
+    
+    # Вычисляем центроиды
+    centroids = []
+    for cluster in clusters:
+        cluster_embeddings = X[cluster]
+        centroid = np.mean(cluster_embeddings, axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) + 1e-8)
+        centroids.append(centroid)
+    
+    # Находим пары для слияния с более низким порогом
+    merged_clusters = []
+    used = [False] * len(clusters)
+    
+    for i in range(len(clusters)):
+        if used[i]:
+            continue
+            
+        current_cluster = clusters[i].copy()
+        used[i] = True
+        
+        # Ищем похожие кластеры для слияния
+        for j in range(i + 1, len(clusters)):
+            if used[j]:
+                continue
+                
+            similarity = float(np.dot(centroids[i], centroids[j]))
+            
+            # Очень агрессивный порог для слияния
+            if similarity >= 0.55:  # Очень низкий порог
+                current_cluster.extend(clusters[j])
+                used[j] = True
+        
+        merged_clusters.append(sorted(current_cluster))
+    
+    return merged_clusters
 
 
 # -------------------------------
@@ -1054,7 +1166,43 @@ def hi_precision_cluster(
     if N == 0:
         return []
 
-    # Приоритет: продвинутый ensemble кластеризации
+    # Приоритет: Максимально консервативный подход (один кластер)
+    if progress_callback:
+        progress_callback("🔗 Максимально консервативный подход...", 75)
+    
+    # Простое решение: все лица в одном кластере для максимальной точности
+    if N <= 10:  # Для небольших датасетов - один кластер
+        if progress_callback:
+            progress_callback("📦 Создание одного кластера для максимальной точности...", 90)
+        return [list(range(N))]
+    
+    # Для больших датасетов используем консервативный графовый метод
+    edges = build_mutual_edges(X, k=min(5, N-1))  # Минимум соседей
+    
+    if progress_callback:
+        progress_callback("🧩 Связные компоненты...", 82)
+    comps = connected_components_from_edges(N, edges)
+    
+    if progress_callback:
+        progress_callback("🎯 Фильтрация по медиоиду...", 88)
+    clusters = filter_by_medoid(X, comps, t_member=0.3)  # Очень консервативный порог
+    
+    if allow_merge:
+        if progress_callback:
+            progress_callback("🧬 Слияние похожих кластеров...", 90)
+        clusters = optional_merge_by_centroids(X, clusters, t_merge=0.4, cluster_attrs=None)  # Очень агрессивное слияние
+    
+    # Минимальная пост-обработка
+    clusters = post_process_clusters(
+        X, clusters,
+        face_qualities=face_qualities,
+        min_cluster_size=1,
+        progress_callback=progress_callback
+    )
+    
+    return clusters
+    
+    # Fallback: продвинутый ensemble кластеризации
     if use_advanced_ensemble:
         clusters = _ensemble_clustering_advanced(
             X, 
