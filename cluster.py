@@ -42,6 +42,14 @@ try:
 except Exception:
     _MANIFOLD_OK = False
 
+try:
+    import torch
+    import torchvision.transforms as transforms
+    from torchvision.models import resnet50, ResNet50_Weights
+    _TORCH_OK = True
+except Exception:
+    _TORCH_OK = False
+
 from sklearn.neighbors import NearestNeighbors  # fallback for kNN
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import cdist, pdist, squareform
@@ -141,6 +149,47 @@ def _blur_var(img: np.ndarray) -> float:
     except Exception:
         return 0.0
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def _combine_face_clothing_features(
+    face_embeddings: np.ndarray, 
+    clothing_features: List[np.ndarray],
+    face_qualities: List[Dict] = None,
+    clothing_weight: float = 0.3
+) -> np.ndarray:
+    """
+    Объединение признаков лица и одежды для улучшенной кластеризации
+    """
+    if not clothing_features or len(clothing_features) == 0:
+        return face_embeddings
+    
+    # Преобразуем список в массив
+    clothing_array = np.array(clothing_features)
+    
+    # Нормализуем признаки одежды
+    clothing_norms = np.linalg.norm(clothing_array, axis=1, keepdims=True)
+    clothing_array = clothing_array / (clothing_norms + 1e-8)
+    
+    # Объединяем признаки лица и одежды
+    # Веса: 70% лицо, 30% одежда
+    face_weight = 1.0 - clothing_weight
+    
+    # Убеждаемся, что размеры совместимы
+    min_len = min(len(face_embeddings), len(clothing_array))
+    face_embeddings = face_embeddings[:min_len]
+    clothing_array = clothing_array[:min_len]
+    
+    # Объединяем признаки
+    combined_features = np.concatenate([
+        face_embeddings * face_weight,
+        clothing_array * clothing_weight
+    ], axis=1)
+    
+    # Нормализуем объединенные признаки
+    combined_norms = np.linalg.norm(combined_features, axis=1, keepdims=True)
+    combined_features = combined_features / (combined_norms + 1e-8)
+    
+    return combined_features
 
 
 def _extract_advanced_features(X: np.ndarray, face_qualities: List[Dict] = None) -> np.ndarray:
@@ -502,6 +551,136 @@ def _smart_merge_clusters(X: np.ndarray, clusters: List[List[int]]) -> List[List
     return merged_clusters
 
 
+def _extract_clothing_features(img: np.ndarray, face_bbox: tuple) -> np.ndarray:
+    """
+    Извлечение признаков одежды из изображения
+    """
+    if not _TORCH_OK:
+        return np.zeros(512, dtype=np.float32)  # Fallback
+    
+    try:
+        # Инициализация модели ResNet50 для извлечения признаков
+        if not hasattr(_extract_clothing_features, 'model'):
+            _extract_clothing_features.model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+            _extract_clothing_features.model.eval()
+            _extract_clothing_features.transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+        
+        # Извлекаем область одежды (ниже лица)
+        x1, y1, x2, y2 = face_bbox
+        face_height = y2 - y1
+        face_width = x2 - x1
+        
+        # Область одежды: расширяем bbox лица вниз
+        clothing_x1 = max(0, int(x1 - face_width * 0.2))
+        clothing_y1 = min(img.shape[0], int(y2 + face_height * 0.1))
+        clothing_x2 = min(img.shape[1], int(x2 + face_width * 0.2))
+        clothing_y2 = min(img.shape[0], int(y2 + face_height * 1.5))
+        
+        # Проверяем, что область одежды существует
+        if clothing_y1 >= clothing_y2 or clothing_x1 >= clothing_x2:
+            return np.zeros(512, dtype=np.float32)
+        
+        # Извлекаем область одежды
+        clothing_crop = img[clothing_y1:clothing_y2, clothing_x1:clothing_x2]
+        
+        if clothing_crop.size == 0:
+            return np.zeros(512, dtype=np.float32)
+        
+        # Преобразуем в RGB если нужно
+        if len(clothing_crop.shape) == 3 and clothing_crop.shape[2] == 3:
+            clothing_crop = cv2.cvtColor(clothing_crop, cv2.COLOR_BGR2RGB)
+        
+        # Применяем трансформации
+        clothing_tensor = _extract_clothing_features.transform(clothing_crop).unsqueeze(0)
+        
+        # Извлекаем признаки
+        with torch.no_grad():
+            features = _extract_clothing_features.model.avgpool(
+                _extract_clothing_features.model.layer4(
+                    _extract_clothing_features.model.layer3(
+                        _extract_clothing_features.model.layer2(
+                            _extract_clothing_features.model.layer1(
+                                _extract_clothing_features.model.maxpool(
+                                    _extract_clothing_features.model.relu(
+                                        _extract_clothing_features.model.bn1(
+                                            _extract_clothing_features.model.conv1(clothing_tensor)
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            features = features.squeeze().numpy()
+        
+        # Нормализуем признаки
+        features = features / (np.linalg.norm(features) + 1e-8)
+        
+        # Обрезаем до 512 измерений для совместимости
+        if len(features) > 512:
+            features = features[:512]
+        elif len(features) < 512:
+            features = np.pad(features, (0, 512 - len(features)), 'constant')
+        
+        return features.astype(np.float32)
+        
+    except Exception as e:
+        print(f"⚠️ Ошибка извлечения признаков одежды: {e}")
+        return np.zeros(512, dtype=np.float32)
+
+
+def _analyze_clothing_color(img: np.ndarray, face_bbox: tuple) -> Dict[str, float]:
+    """
+    Анализ цветов одежды
+    """
+    try:
+        x1, y1, x2, y2 = face_bbox
+        face_height = y2 - y1
+        
+        # Область одежды
+        clothing_x1 = max(0, int(x1 - (x2-x1) * 0.2))
+        clothing_y1 = min(img.shape[0], int(y2 + face_height * 0.1))
+        clothing_x2 = min(img.shape[1], int(x2 + (x2-x1) * 0.2))
+        clothing_y2 = min(img.shape[0], int(y2 + face_height * 1.2))
+        
+        if clothing_y1 >= clothing_y2 or clothing_x1 >= clothing_x2:
+            return {'dominant_color': 0.0, 'color_variance': 0.0, 'brightness': 0.5}
+        
+        clothing_crop = img[clothing_y1:clothing_y2, clothing_x1:clothing_x2]
+        
+        if clothing_crop.size == 0:
+            return {'dominant_color': 0.0, 'color_variance': 0.0, 'brightness': 0.5}
+        
+        # Преобразуем в HSV для лучшего анализа цвета
+        hsv = cv2.cvtColor(clothing_crop, cv2.COLOR_BGR2HSV)
+        
+        # Доминирующий цвет (Hue)
+        hist_h = cv2.calcHist([hsv], [0], None, [180], [0, 180])
+        dominant_hue = np.argmax(hist_h) / 180.0
+        
+        # Вариативность цвета
+        color_variance = np.var(hsv[:, :, 0]) / 180.0
+        
+        # Яркость
+        brightness = np.mean(hsv[:, :, 2]) / 255.0
+        
+        return {
+            'dominant_color': dominant_hue,
+            'color_variance': color_variance,
+            'brightness': brightness
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Ошибка анализа цвета одежды: {e}")
+        return {'dominant_color': 0.0, 'color_variance': 0.0, 'brightness': 0.5}
+
+
 def _assess_face_quality(face, img: np.ndarray) -> Dict[str, float]:
     """
     Профессиональная оценка качества лица
@@ -578,17 +757,19 @@ def extract_embeddings(
     min_score: float = 0.3,  # Снижено для начальной детекции
     min_blur_var: float = MIN_BLUR_VAR,
     min_quality_score: float = 0.4,  # Минимальная итоговая оценка качества
+    include_clothing: bool = True,  # Включить анализ одежды
     progress_callback=None,
-) -> Tuple[np.ndarray, List[Path], Dict[Path, int], List[Path], List[Path], List[Dict]]:
+) -> Tuple[np.ndarray, List[Path], Dict[Path, int], List[Path], List[Path], List[Dict], List[np.ndarray]]:
     """
-    Профессиональное извлечение эмбеддингов с оценкой качества
-    Возвращает: (X, owners, img_face_count, unreadable, no_faces, face_qualities)
-      - X: np.ndarray [N, D] L2-нормированные эмбеддинги
+    Профессиональное извлечение эмбеддингов с анализом одежды
+    Возвращает: (X, owners, img_face_count, unreadable, no_faces, face_qualities, clothing_features)
+      - X: np.ndarray [N, D] L2-нормированные эмбеддинги лиц
       - owners: list[Path] длины N (соответствие эмбеддинга → исходный файл)
       - img_face_count: dict[Path] → кол-во используемых лиц из изображения
       - unreadable: список битых/нечитаемых файлов
       - no_faces: список файлов без пригодных лиц
       - face_qualities: список с оценками качества для каждого лица
+      - clothing_features: список с признаками одежды для каждого лица
     """
     if not _INSIGHTFACE_OK or FaceAnalysis is None:
         if progress_callback:
@@ -612,6 +793,7 @@ def extract_embeddings(
     embeddings: List[np.ndarray] = []
     owners: List[Path] = []
     face_qualities: List[Dict] = []
+    clothing_features: List[np.ndarray] = []
     img_face_count: Dict[Path, int] = {}
     unreadable: List[Path] = []
     no_faces: List[Path] = []
@@ -637,6 +819,22 @@ def extract_embeddings(
         for f in faces:
             # Профессиональная оценка качества лица
             quality = _assess_face_quality(f, img)
+            
+            # Извлечение признаков одежды
+            if include_clothing:
+                clothing_feat = _extract_clothing_features(img, f.bbox)
+                clothing_color = _analyze_clothing_color(img, f.bbox)
+                
+                # Объединяем признаки одежды
+                combined_clothing = np.concatenate([
+                    clothing_feat,
+                    np.array([clothing_color['dominant_color'], 
+                             clothing_color['color_variance'], 
+                             clothing_color['brightness']], dtype=np.float32)
+                ])
+                clothing_features.append(combined_clothing)
+            else:
+                clothing_features.append(np.zeros(515, dtype=np.float32))  # 512 + 3
             
             # Фильтрация по итоговой оценке качества
             if quality['total_score'] < min_quality_score:
@@ -690,7 +888,7 @@ def extract_embeddings(
         norms = np.linalg.norm(X, axis=1, keepdims=True)
         X = X / (norms + 1e-8)
     
-    return X, owners, img_face_count, unreadable, no_faces, face_qualities
+    return X, owners, img_face_count, unreadable, no_faces, face_qualities, clothing_features
 
 
 # -------------------------------
@@ -1150,21 +1348,30 @@ def _aggressive_merge_clusters(X: np.ndarray, clusters: List[List[int]]) -> List
 def hi_precision_cluster(
     X: np.ndarray,
     face_qualities: List[Dict] = None,
+    clothing_features: List[np.ndarray] = None,
     min_cluster_size: int = 2,
     min_samples: int = 1,
     t_member: float = T_MEMBER,
     allow_merge: bool = True,
     t_merge: float = T_MERGE,
     use_advanced_ensemble: bool = True,  # Приоритет продвинутому ensemble
+    use_clothing: bool = True,
+    clothing_weight: float = 0.3,
     progress_callback=None,
 ) -> List[List[int]]:
     """
-    Продвинутая кластеризация лиц (максимальная точность)
+    Продвинутая кластеризация лиц с анализом одежды (максимальная точность)
     Использует ensemble из множественных state-of-the-art алгоритмов
     """
     N = X.shape[0]
     if N == 0:
         return []
+    
+    # Объединяем признаки лица и одежды для улучшенной кластеризации
+    if use_clothing and clothing_features:
+        if progress_callback:
+            progress_callback("👕 Объединение признаков лица и одежды...", 70)
+        X = _combine_face_clothing_features(X, clothing_features, face_qualities, clothing_weight)
 
     # Приоритет: Максимально консервативный подход (один кластер)
     if progress_callback:
@@ -1304,12 +1511,13 @@ def build_plan_live(
 
     # 1) Профессиональное извлечение эмбеддингов
     try:
-        X, owners, img_face_count, unreadable, no_faces, face_qualities = extract_embeddings(
+        X, owners, img_face_count, unreadable, no_faces, face_qualities, clothing_features = extract_embeddings(
             all_images,
             providers=providers,
             det_size=det_size,
             min_score=0.3,  # Низкий порог для начальной детекции
             min_quality_score=0.35,  # Итоговая оценка качества
+            include_clothing=True,
             progress_callback=progress_callback,
         )
     except Exception as e:
@@ -1339,12 +1547,15 @@ def build_plan_live(
     clusters_idx = hi_precision_cluster(
         X,
         face_qualities=face_qualities,
+        clothing_features=clothing_features,
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
         t_member=t_member,
         allow_merge=True,
         t_merge=t_merge,
         use_advanced_ensemble=True,  # Используем продвинутый ensemble как приоритет
+        use_clothing=True,
+        clothing_weight=0.3,
         progress_callback=progress_callback,
     )
 
