@@ -43,6 +43,22 @@ except Exception:
     _MANIFOLD_OK = False
 
 try:
+    from denmune import DenMune
+    _DENMUNE_OK = True
+except Exception:
+    DenMune = None
+    _DENMUNE_OK = False
+
+try:
+    from karateclub import GraphWave, Node2Vec, DeepWalk
+    _KARATECLUB_OK = True
+except Exception:
+    GraphWave = None
+    Node2Vec = None
+    DeepWalk = None
+    _KARATECLUB_OK = False
+
+try:
     import torch
     import torchvision.transforms as transforms
     from torchvision.models import resnet50, ResNet50_Weights
@@ -306,11 +322,51 @@ def _ensemble_clustering_advanced(
         except:
             pass
     
-    # 2. Spectral Clustering
+    # 2. DenMune кластеризация
+    if _DENMUNE_OK and DenMune is not None:
+        try:
+            if progress_callback:
+                progress_callback("🔬 DenMune ensemble...", 77)
+            
+            # Разные параметры k для DenMune
+            k_options = [min(10, N-1), min(15, N-1), min(20, N-1)]
+            
+            for k in k_options:
+                try:
+                    clusters = denmune_cluster(X, face_qualities, min_cluster_size=2, k=k, progress_callback=None)
+                    if clusters:
+                        clustering_results.append(clusters)
+                        weights.append(0.25)  # Высокий вес для DenMune
+                except:
+                    continue
+        except:
+            pass
+    
+    # 3. Karate Club кластеризация
+    if _KARATECLUB_OK and N >= 5:
+        try:
+            if progress_callback:
+                progress_callback("🥋 Karate Club ensemble...", 78)
+            
+            # Разные размеры эмбеддингов
+            embedding_dims = [64, 128, 256]
+            
+            for dim in embedding_dims:
+                try:
+                    clusters = karate_club_cluster(X, face_qualities, min_cluster_size=2, embedding_dim=dim, progress_callback=None)
+                    if clusters:
+                        clustering_results.append(clusters)
+                        weights.append(0.2)  # Средний вес для Karate Club
+                except:
+                    continue
+        except:
+            pass
+    
+    # 4. Spectral Clustering
     if _SKLEARN_ADVANCED_OK and N >= 3:
         try:
             if progress_callback:
-                progress_callback("🌈 Спектральная кластеризация...", 78)
+                progress_callback("🌈 Спектральная кластеризация...", 79)
             
             # Более консервативные количества кластеров
             n_clusters_options = [max(2, N//8), max(2, N//6), max(2, N//4)]
@@ -330,7 +386,7 @@ def _ensemble_clustering_advanced(
                     clusters = _labels_to_clusters(labels)
                     if clusters:
                         clustering_results.append(clusters)
-                        weights.append(0.2)
+                        weights.append(0.15)
                 except:
                     continue
         except:
@@ -1123,6 +1179,110 @@ def optional_merge_by_centroids(
                 used[j] = True
         merged.append(sorted(cur))
     return merged
+
+
+def denmune_cluster(
+    X: np.ndarray,
+    face_qualities: List[Dict] = None,
+    min_cluster_size: int = 2,
+    k: int = 20,
+    progress_callback=None,
+) -> List[List[int]]:
+    """
+    Кластеризация с помощью DenMune - современный алгоритм для кластеров произвольной формы
+    """
+    N = X.shape[0]
+    if N == 0:
+        return []
+    
+    if progress_callback:
+        progress_callback("🔬 DenMune кластеризация...", 75)
+    
+    if not _DENMUNE_OK or DenMune is None:
+        if progress_callback:
+            progress_callback("⚠️ DenMune недоступен", 76)
+        return []
+    
+    try:
+        # DenMune работает с k ближайших соседей
+        clusterer = DenMune(k=k)
+        labels = clusterer.fit_predict(X)
+        
+        # Преобразуем метки в кластеры
+        clusters = _labels_to_clusters(labels)
+        
+        # Фильтруем по минимальному размеру
+        clusters = [c for c in clusters if len(c) >= min_cluster_size]
+        
+        if progress_callback:
+            progress_callback(f"✅ DenMune: найдено {len(clusters)} кластеров", 80)
+        
+        return clusters
+        
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"❌ Ошибка DenMune: {str(e)}", 76)
+        return []
+
+
+def karate_club_cluster(
+    X: np.ndarray,
+    face_qualities: List[Dict] = None,
+    min_cluster_size: int = 2,
+    embedding_dim: int = 128,
+    progress_callback=None,
+) -> List[List[int]]:
+    """
+    Кластеризация с помощью Karate Club - графовые эмбеддинги + K-means
+    """
+    N = X.shape[0]
+    if N == 0:
+        return []
+    
+    if progress_callback:
+        progress_callback("🥋 Karate Club кластеризация...", 75)
+    
+    if not _KARATECLUB_OK:
+        if progress_callback:
+            progress_callback("⚠️ Karate Club недоступен", 76)
+        return []
+    
+    try:
+        # Создаем граф из k-NN
+        from sklearn.neighbors import kneighbors_graph
+        k = min(10, N-1)
+        graph = kneighbors_graph(X, n_neighbors=k, mode='connectivity', include_self=False)
+        
+        # Создаем NetworkX граф
+        import networkx as nx
+        G = nx.from_scipy_sparse_array(graph)
+        
+        # Генерируем эмбеддинги узлов
+        model = Node2Vec(dimensions=embedding_dim, walk_length=20, num_walks=10)
+        model.fit(G)
+        embeddings = model.get_embedding()
+        
+        # Кластеризация эмбеддингов с помощью K-means
+        from sklearn.cluster import KMeans
+        n_clusters = min(max(2, N // 10), N // 2)  # Адаптивное количество кластеров
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(embeddings)
+        
+        # Преобразуем метки в кластеры
+        clusters = _labels_to_clusters(labels)
+        
+        # Фильтруем по минимальному размеру
+        clusters = [c for c in clusters if len(c) >= min_cluster_size]
+        
+        if progress_callback:
+            progress_callback(f"✅ Karate Club: найдено {len(clusters)} кластеров", 80)
+        
+        return clusters
+        
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"❌ Ошибка Karate Club: {str(e)}", 76)
+        return []
 
 
 def hdbscan_cluster_professional(

@@ -12,8 +12,13 @@ def test_clustering():
     print("🔍 Тестирование алгоритма кластеризации...")
     
     try:
-        from cluster import build_plan_live
+        from cluster import build_plan_live, denmune_cluster, karate_club_cluster, _DENMUNE_OK, _KARATECLUB_OK
         print("✅ Модуль cluster импортирован")
+        
+        # Проверяем доступность новых библиотек
+        print(f"🔬 DenMune доступен: {_DENMUNE_OK}")
+        print(f"🥋 Karate Club доступен: {_KARATECLUB_OK}")
+        
     except ImportError as e:
         print(f"❌ Ошибка импорта: {e}")
         return False
@@ -68,6 +73,11 @@ def test_clustering():
                     print(f"    ... и еще {len(files) - 3} файлов")
         
         print("\n✅ Кластеризация завершена успешно!")
+        
+        # Тестируем новые методы кластеризации отдельно
+        print("\n🧪 Тестирование новых методов кластеризации...")
+        test_new_clustering_methods()
+        
         return True
         
     except Exception as e:
@@ -75,6 +85,53 @@ def test_clustering():
         import traceback
         traceback.print_exc()
         return False
+
+
+def test_new_clustering_methods():
+    """Тестируем новые методы кластеризации на синтетических данных"""
+    import numpy as np
+    from cluster import denmune_cluster, karate_club_cluster, _DENMUNE_OK, _KARATECLUB_OK
+    
+    print("🧪 Создание синтетических данных для тестирования...")
+    
+    # Создаем синтетические данные - 3 кластера по 10 точек каждый
+    np.random.seed(42)
+    cluster1 = np.random.normal([0, 0], 0.5, (10, 2))
+    cluster2 = np.random.normal([5, 5], 0.5, (10, 2))
+    cluster3 = np.random.normal([-3, 4], 0.5, (10, 2))
+    
+    X = np.vstack([cluster1, cluster2, cluster3])
+    
+    print(f"📊 Создано {X.shape[0]} точек в {X.shape[1]} измерениях")
+    
+    # Тестируем DenMune
+    if _DENMUNE_OK:
+        print("\n🔬 Тестирование DenMune...")
+        try:
+            clusters = denmune_cluster(X, min_cluster_size=2, k=10)
+            print(f"✅ DenMune: найдено {len(clusters)} кластеров")
+            for i, cluster in enumerate(clusters):
+                print(f"  Кластер {i+1}: {len(cluster)} точек")
+        except Exception as e:
+            print(f"❌ Ошибка DenMune: {e}")
+    else:
+        print("⚠️ DenMune недоступен")
+    
+    # Тестируем Karate Club
+    if _KARATECLUB_OK:
+        print("\n🥋 Тестирование Karate Club...")
+        try:
+            clusters = karate_club_cluster(X, min_cluster_size=2, embedding_dim=64)
+            print(f"✅ Karate Club: найдено {len(clusters)} кластеров")
+            for i, cluster in enumerate(clusters):
+                print(f"  Кластер {i+1}: {len(cluster)} точек")
+        except Exception as e:
+            print(f"❌ Ошибка Karate Club: {e}")
+    else:
+        print("⚠️ Karate Club недоступен")
+    
+    print("✅ Тестирование новых методов завершено!")
+
 
 if __name__ == "__main__":
     print("🚀 Тест алгоритма кластеризации FaceSort\n")
