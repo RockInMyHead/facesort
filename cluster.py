@@ -1,7 +1,4 @@
 import os
-import glob
-import math
-import random
 import cv2
 import shutil
 import numpy as np
@@ -83,7 +80,6 @@ from sklearn.neighbors import NearestNeighbors  # fallback for kNN
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import cdist, pdist, squareform
 from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.optimize import minimize
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -97,63 +93,110 @@ except Exception as e:
     _INSIGHTFACE_OK = False
 
 # -------------------------------
-# Config / Defaults
-# -------------------------------
-IMG_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
-
-# Quality gates (оптимизированы для лучшего распознавания)
-MIN_DET_SCORE = 0.50  # Снижено для включения большего количества лиц
-MIN_BLUR_VAR = 50.0   # Снижено для менее строгой фильтрации по резкости
-
-# Hi-Precision graph params (оптимизированы для точности)
-KNN_K = 60           # Увеличено для лучшего анализа соседства
-T_STRICT = 0.65      # Снижено для более гибкого создания рёбер
-T_MEMBER = 0.60      # Снижено для включения большего количества лиц в кластеры
-T_MERGE = 0.70       # Снижено для лучшего слияния похожих кластеров
-
-# Универсальная адаптация графа (оптимизирована)
-DEGREE_TARGET = (3, 8)   # Увеличено для более плотных связей
-MUTUAL_RANK   = 8        # Увеличено для более гибкого взаимного ранга
-MIN_SHARED_NEIGHBORS = 2 # Снижено для более гибкого анализа соседства
-
-# Общие имена для exclude/include
-EXCLUDED_NAMES = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
-
-# -------------------------------
-# Utils
+# Configuration Classes
 # -------------------------------
 
+class ClusteringConfig:
+    """Configuration for face clustering algorithms"""
+    
+    # Image formats
+    IMG_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
+    
+    # Quality thresholds
+    MIN_DET_SCORE = 0.50
+    MIN_BLUR_VAR = 50.0
+    
+    # Traditional clustering parameters
+    KNN_K = 60
+    T_STRICT = 0.65
+    T_MEMBER = 0.60
+    T_MERGE = 0.70
+    DEGREE_TARGET = (3, 8)
+    MUTUAL_RANK = 8
+    MIN_SHARED_NEIGHBORS = 2
+    
+    # GCN clustering parameters
+    GCN_K = 50
+    GCN_MIN_K = 5
+    GCN_MAX_K = 25
+    GCN_Q = 0.75
+    GCN_EPOCHS = 50
+    GCN_THRESHOLD = 0.5
+    
+    # Excluded folder names
+    EXCLUDED_NAMES = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+
+# Backward compatibility
+IMG_EXTS = ClusteringConfig.IMG_EXTS
+MIN_DET_SCORE = ClusteringConfig.MIN_DET_SCORE
+MIN_BLUR_VAR = ClusteringConfig.MIN_BLUR_VAR
+KNN_K = ClusteringConfig.KNN_K
+T_STRICT = ClusteringConfig.T_STRICT
+T_MEMBER = ClusteringConfig.T_MEMBER
+T_MERGE = ClusteringConfig.T_MERGE
+DEGREE_TARGET = ClusteringConfig.DEGREE_TARGET
+MUTUAL_RANK = ClusteringConfig.MUTUAL_RANK
+MIN_SHARED_NEIGHBORS = ClusteringConfig.MIN_SHARED_NEIGHBORS
+EXCLUDED_NAMES = ClusteringConfig.EXCLUDED_NAMES
+
+# -------------------------------
+# Utility Classes
+# -------------------------------
+
+class FileUtils:
+    """Utility class for file operations"""
+    
+    @staticmethod
+    def is_image(p: Path) -> bool:
+        return p.suffix.lower() in ClusteringConfig.IMG_EXTS
+    
+    @staticmethod
+    def _win_long(path: Path) -> str:
+        p = str(path.resolve())
+        if os.name == "nt":
+            return "\\\\?\\" + p if not p.startswith("\\\\?\\") else p
+        return p
+    
+    @staticmethod
+    def _safe_path(p: Path) -> str:
+        return FileUtils._win_long(p)
+    
+    @staticmethod
+    def _safe_move(src: Path, dst: Path):
+        shutil.move(FileUtils._safe_path(src), FileUtils._safe_path(dst))
+    
+    @staticmethod
+    def _safe_copy(src: Path, dst: Path):
+        shutil.copy2(FileUtils._safe_path(src), FileUtils._safe_path(dst))
+    
+    @staticmethod
+    def imread_safe(path: Path):
+        try:
+            data = np.fromfile(FileUtils._win_long(path), dtype=np.uint8)
+            if data.size == 0:
+                return None
+            return cv2.imdecode(data, cv2.IMREAD_COLOR)
+        except Exception:
+            return None
+
+# Backward compatibility
 def is_image(p: Path) -> bool:
-    return p.suffix.lower() in IMG_EXTS
-
+    return FileUtils.is_image(p)
 
 def _win_long(path: Path) -> str:
-    p = str(path.resolve())
-    if os.name == "nt":
-        return "\\\\?\\" + p if not p.startswith("\\\\?\\") else p
-    return p
-
+    return FileUtils._win_long(path)
 
 def _safe_path(p: Path) -> str:
-    return _win_long(p)
-
+    return FileUtils._safe_path(p)
 
 def _safe_move(src: Path, dst: Path):
-    shutil.move(_safe_path(src), _safe_path(dst))
-
+    FileUtils._safe_move(src, dst)
 
 def _safe_copy(src: Path, dst: Path):
-    shutil.copy2(_safe_path(src), _safe_path(dst))
-
+    FileUtils._safe_copy(src, dst)
 
 def imread_safe(path: Path):
-    try:
-        data = np.fromfile(_win_long(path), dtype=np.uint8)
-        if data.size == 0:
-            return None
-        return cv2.imdecode(data, cv2.IMREAD_COLOR)
-    except Exception:
-        return None
+    return FileUtils.imread_safe(path)
 
 
 def _parse_cluster_id(name: str) -> Optional[int]:
@@ -1678,66 +1721,90 @@ class DotProductLinkPredictor(nn.Module):
         z_j = z[edges[1]]
         return (z_i * z_j).sum(dim=-1)
 
+class GCNClusteringEngine:
+    """GCN-based clustering engine with optimized operations"""
+    
+    def __init__(self, config: ClusteringConfig = None):
+        self.config = config or ClusteringConfig()
+    
+    @staticmethod
+    def load_face_embedding(img_path: str, app) -> np.ndarray:
+        """Load face embedding using InsightFace"""
+        img = cv2.imread(img_path)
+        faces = app.get(img)
+        if not faces:
+            return None
+        # Берём крупнейшее лицо
+        face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+        return face.normed_embedding.astype("float32")
+    
+    @staticmethod
+    def build_mutual_mask(neighbors: List[set]) -> List[set]:
+        """Build mutual kNN mask"""
+        N = len(neighbors)
+        mutual = []
+        for i in range(N):
+            m = set(j for j in neighbors[i] if i in neighbors[j])
+            mutual.append(m)
+        return mutual
+    
+    @staticmethod
+    def adaptive_edges(scores_row: np.ndarray, idx_row: np.ndarray, mutual_set: set,
+                       min_k=5, max_k=30, q=0.75) -> List[Tuple[int, float]]:
+        """Adaptive edge selection based on mutual kNN and quantiles"""
+        # кандидаты — только взаимные соседи
+        cands = [(j, s) for j, s in zip(idx_row, scores_row) if j in mutual_set]
+        if not cands:
+            # fallback: берём топ min_k по score
+            top = np.argsort(-scores_row)[:min_k]
+            return [(int(idx_row[t]), float(scores_row[t])) for t in top]
+        sims = np.array([s for _, s in cands], dtype=np.float32)
+        thr = np.quantile(sims, q)  # локальный порог (квантиль)
+        sel = [(j, s) for j, s in cands if s >= thr]
+        # ограничиваем диапазон
+        sel = sorted(sel, key=lambda x: -x[1])[:max_k]
+        # при недостатке — добираем лучшими невзаимными (мягкий fallback)
+        if len(sel) < min_k:
+            extra_top = [t for t in np.argsort(-scores_row) if int(idx_row[t]) not in {j for j,_ in sel}]
+            for t in extra_top:
+                sel.append((int(idx_row[t]), float(scores_row[t])))
+                if len(sel) >= min_k:
+                    break
+        return sel
+    
+    @staticmethod
+    def get_pos_neg_edges(edge_index, num_nodes, neg_ratio=1.0):
+        """Get positive and negative edges for training"""
+        # Позитивы — текущие очищенные рёбра
+        pos = edge_index
+        # Негативы — случайные ненаблюдаемые пары
+        num_neg = int(pos.size(1) * neg_ratio)
+        neg = negative_sampling(pos, num_nodes=num_nodes, num_neg_samples=num_neg, method='sparse')
+        return pos, neg
+
+# Backward compatibility functions
 def load_face_embedding_gcn(img_path: str, app) -> np.ndarray:
-    """Load face embedding using InsightFace"""
-    img = cv2.imread(img_path)
-    faces = app.get(img)
-    if not faces:
-        return None
-    # Берём крупнейшее лицо
-    face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-    return face.normed_embedding.astype("float32")
+    return GCNClusteringEngine.load_face_embedding(img_path, app)
 
 def build_mutual_mask(neighbors: List[set]) -> List[set]:
-    """Build mutual kNN mask"""
-    N = len(neighbors)
-    mutual = []
-    for i in range(N):
-        m = set(j for j in neighbors[i] if i in neighbors[j])
-        mutual.append(m)
-    return mutual
+    return GCNClusteringEngine.build_mutual_mask(neighbors)
 
 def adaptive_edges(scores_row: np.ndarray, idx_row: np.ndarray, mutual_set: set,
                    min_k=5, max_k=30, q=0.75) -> List[Tuple[int, float]]:
-    """Adaptive edge selection based on mutual kNN and quantiles"""
-    # кандидаты — только взаимные соседи
-    cands = [(j, s) for j, s in zip(idx_row, scores_row) if j in mutual_set]
-    if not cands:
-        # fallback: берём топ min_k по score
-        top = np.argsort(-scores_row)[:min_k]
-        return [(int(idx_row[t]), float(scores_row[t])) for t in top]
-    sims = np.array([s for _, s in cands], dtype=np.float32)
-    thr = np.quantile(sims, q)  # локальный порог (квантиль)
-    sel = [(j, s) for j, s in cands if s >= thr]
-    # ограничиваем диапазон
-    sel = sorted(sel, key=lambda x: -x[1])[:max_k]
-    # при недостатке — добираем лучшими невзаимными (мягкий fallback)
-    if len(sel) < min_k:
-        extra_top = [t for t in np.argsort(-scores_row) if int(idx_row[t]) not in {j for j,_ in sel}]
-        for t in extra_top:
-            sel.append((int(idx_row[t]), float(scores_row[t])))
-            if len(sel) >= min_k:
-                break
-    return sel
+    return GCNClusteringEngine.adaptive_edges(scores_row, idx_row, mutual_set, min_k, max_k, q)
 
 def get_pos_neg_edges(edge_index, num_nodes, neg_ratio=1.0):
-    """Get positive and negative edges for training"""
-    # Позитивы — текущие очищенные рёбра
-    pos = edge_index
-    # Негативы — случайные ненаблюдаемые пары
-    num_neg = int(pos.size(1) * neg_ratio)
-    neg = negative_sampling(pos, num_nodes=num_nodes, num_neg_samples=num_neg, method='sparse')
-    return pos, neg
+    return GCNClusteringEngine.get_pos_neg_edges(edge_index, num_nodes, neg_ratio)
 
 def gcn_based_clustering(
     X: np.ndarray,
     valid_paths: List[str],
-    K: int = 50,
-    min_k: int = 5,
-    max_k: int = 25,
-    q: float = 0.75,
-    epochs: int = 50,
-    threshold: float = 0.5,
+    K: int = None,
+    min_k: int = None,
+    max_k: int = None,
+    q: float = None,
+    epochs: int = None,
+    threshold: float = None,
     progress_callback=None
 ) -> Dict[int, List[int]]:
     """
@@ -1762,6 +1829,15 @@ def gcn_based_clustering(
             progress_callback("❌ GCN clustering requires torch, torch_geometric, faiss, and networkx", 100)
         return {}
     
+    # Use config defaults if not provided
+    config = ClusteringConfig()
+    K = K or config.GCN_K
+    min_k = min_k or config.GCN_MIN_K
+    max_k = max_k or config.GCN_MAX_K
+    q = q or config.GCN_Q
+    epochs = epochs or config.GCN_EPOCHS
+    threshold = threshold or config.GCN_THRESHOLD
+    
     N, D = X.shape
     
     if progress_callback:
@@ -1781,7 +1857,7 @@ def gcn_based_clustering(
         progress_callback("🔗 Building mutual kNN mask...", 20)
     
     # 2) Build mutual kNN mask
-    mutual_sets = build_mutual_mask(neighbors)
+    mutual_sets = GCNClusteringEngine.build_mutual_mask(neighbors)
     
     if progress_callback:
         progress_callback("⚡ Selecting adaptive edges...", 30)
@@ -1790,7 +1866,7 @@ def gcn_based_clustering(
     edges = []
     edge_w = []
     for i in range(N):
-        sel = adaptive_edges(scores[i], knn_idx[i], mutual_sets[i], min_k=min_k, max_k=max_k, q=q)
+        sel = GCNClusteringEngine.adaptive_edges(scores[i], knn_idx[i], mutual_sets[i], min_k=min_k, max_k=max_k, q=q)
         for j, s in sel:
             edges.append([i, j])
             edge_w.append(s)
@@ -1822,7 +1898,7 @@ def gcn_based_clustering(
         pred.train()
         opt.zero_grad()
         z = encoder(data.x, data.edge_index)
-        pos, neg = get_pos_neg_edges(data.edge_index, N, neg_ratio=1.0)
+        pos, neg = GCNClusteringEngine.get_pos_neg_edges(data.edge_index, N, neg_ratio=1.0)
         pos_logits = pred(z, pos)
         neg_logits = pred(z, neg)
         y_pos = torch.ones_like(pos_logits)
@@ -1885,13 +1961,13 @@ def gcn_based_clustering(
 def build_plan_live_gcn(
     input_dir: Path,
     det_size=(640, 640),
-    min_score: float = 0.5,
-    K: int = 50,
-    min_k: int = 5,
-    max_k: int = 25,
-    q: float = 0.75,
-    epochs: int = 50,
-    threshold: float = 0.5,
+    min_score: float = None,
+    K: int = None,
+    min_k: int = None,
+    max_k: int = None,
+    q: float = None,
+    epochs: int = None,
+    threshold: float = None,
     providers: List[str] = ("CPUExecutionProvider",),
     progress_callback=None,
     include_excluded: bool = False,
@@ -1916,6 +1992,16 @@ def build_plan_live_gcn(
     Returns:
         Dictionary with clustering results
     """
+    # Use config defaults if not provided
+    config = ClusteringConfig()
+    min_score = min_score or config.MIN_DET_SCORE
+    K = K or config.GCN_K
+    min_k = min_k or config.GCN_MIN_K
+    max_k = max_k or config.GCN_MAX_K
+    q = q or config.GCN_Q
+    epochs = epochs or config.GCN_EPOCHS
+    threshold = threshold or config.GCN_THRESHOLD
+    
     input_dir = Path(input_dir)
     
     if progress_callback:
@@ -1977,7 +2063,7 @@ def build_plan_live_gcn(
     
     for i, img_path in enumerate(all_images):
         try:
-            emb = load_face_embedding_gcn(str(img_path), app)
+            emb = GCNClusteringEngine.load_face_embedding(str(img_path), app)
             if emb is not None:
                 embs.append(emb)
                 valid_paths.append(str(img_path))
