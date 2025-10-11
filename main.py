@@ -19,10 +19,14 @@ import re
 from io import BytesIO
 
 try:
-    from cluster import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS, _INSIGHTFACE_OK
+    from cluster import build_plan_live, build_plan_live_gcn, distribute_to_folders, process_group_folder, IMG_EXTS, _INSIGHTFACE_OK, _TORCH_OK, _TORCH_GEOMETRIC_OK, _FAISS_OK, _NX_OK
 except ImportError as e:
     print(f"❌ Ошибка импорта cluster: {e}")
     _INSIGHTFACE_OK = False
+    _TORCH_OK = False
+    _TORCH_GEOMETRIC_OK = False
+    _FAISS_OK = False
+    _NX_OK = False
 
 app = FastAPI(title="Кластеризация лиц", description="API для кластеризации лиц и распределения по группам")
 
@@ -275,7 +279,14 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
             app_state["current_tasks"][task_id]["message"] = "Кластеризация лиц..."
             await asyncio.sleep(2)
             app_state["current_tasks"][task_id]["progress"] = 75
-            plan = build_plan_live(path, progress_callback=progress_callback)
+            
+            # Use GCN-based clustering if available, otherwise fallback to traditional
+            if _TORCH_OK and _TORCH_GEOMETRIC_OK and _FAISS_OK and _NX_OK:
+                app_state["current_tasks"][task_id]["message"] = "🧠 GCN-based кластеризация лиц..."
+                plan = build_plan_live(path, use_gcn=True, progress_callback=progress_callback)
+            else:
+                app_state["current_tasks"][task_id]["message"] = "🔄 Традиционная кластеризация лиц..."
+                plan = build_plan_live(path, use_gcn=False, progress_callback=progress_callback)
             
             app_state["current_tasks"][task_id]["message"] = "Распределение по папкам..."
             app_state["current_tasks"][task_id]["progress"] = 90
@@ -313,9 +324,17 @@ async def get_index():
 @app.get("/api/status")
 async def get_status():
     """Получить статус зависимостей"""
+    gcn_available = _TORCH_OK and _TORCH_GEOMETRIC_OK and _FAISS_OK and _NX_OK
+    
     return {
         "insightface_ok": _INSIGHTFACE_OK,
-        "message": "InsightFace доступен" if _INSIGHTFACE_OK else "InsightFace не доступен. Установите: pip install insightface"
+        "gcn_available": gcn_available,
+        "torch_ok": _TORCH_OK,
+        "torch_geometric_ok": _TORCH_GEOMETRIC_OK,
+        "faiss_ok": _FAISS_OK,
+        "networkx_ok": _NX_OK,
+        "message": "InsightFace доступен" if _INSIGHTFACE_OK else "InsightFace не доступен. Установите: pip install insightface",
+        "gcn_message": "GCN-based кластеризация доступна" if gcn_available else "GCN-based кластеризация недоступна. Установите: pip install torch torch-geometric faiss-cpu networkx"
     }
 
 @app.get("/api/drives")

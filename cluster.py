@@ -1,4 +1,7 @@
 import os
+import glob
+import math
+import random
 import cv2
 import shutil
 import numpy as np
@@ -60,11 +63,21 @@ except Exception:
 
 try:
     import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
     import torchvision.transforms as transforms
     from torchvision.models import resnet50, ResNet50_Weights
     _TORCH_OK = True
 except Exception:
     _TORCH_OK = False
+
+try:
+    from torch_geometric.data import Data
+    from torch_geometric.nn import GCNConv
+    from torch_geometric.utils import negative_sampling, to_undirected
+    _TORCH_GEOMETRIC_OK = True
+except Exception:
+    _TORCH_GEOMETRIC_OK = False
 
 from sklearn.neighbors import NearestNeighbors  # fallback for kNN
 from sklearn.preprocessing import StandardScaler
@@ -1639,8 +1652,439 @@ def hi_precision_cluster(
     return clusters
 
 # -------------------------------
+# GCN-based Face Clustering Classes
+# -------------------------------
+
+class GCNEncoder(nn.Module):
+    """GCN Encoder for face embeddings"""
+    def __init__(self, in_dim, hid=256, out=128, dropout=0.2):
+        super().__init__()
+        self.conv1 = GCNConv(in_dim, hid)
+        self.conv2 = GCNConv(hid, out)
+        self.dropout = dropout
+        
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv2(x, edge_index)
+        return x
+
+class DotProductLinkPredictor(nn.Module):
+    """Link Predictor using dot product"""
+    def forward(self, z, edges):
+        # edges: [2, M]; score = z_i · z_j
+        z_i = z[edges[0]]
+        z_j = z[edges[1]]
+        return (z_i * z_j).sum(dim=-1)
+
+def load_face_embedding_gcn(img_path: str, app) -> np.ndarray:
+    """Load face embedding using InsightFace"""
+    img = cv2.imread(img_path)
+    faces = app.get(img)
+    if not faces:
+        return None
+    # Берём крупнейшее лицо
+    face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+    return face.normed_embedding.astype("float32")
+
+def build_mutual_mask(neighbors: List[set]) -> List[set]:
+    """Build mutual kNN mask"""
+    N = len(neighbors)
+    mutual = []
+    for i in range(N):
+        m = set(j for j in neighbors[i] if i in neighbors[j])
+        mutual.append(m)
+    return mutual
+
+def adaptive_edges(scores_row: np.ndarray, idx_row: np.ndarray, mutual_set: set,
+                   min_k=5, max_k=30, q=0.75) -> List[Tuple[int, float]]:
+    """Adaptive edge selection based on mutual kNN and quantiles"""
+    # кандидаты — только взаимные соседи
+    cands = [(j, s) for j, s in zip(idx_row, scores_row) if j in mutual_set]
+    if not cands:
+        # fallback: берём топ min_k по score
+        top = np.argsort(-scores_row)[:min_k]
+        return [(int(idx_row[t]), float(scores_row[t])) for t in top]
+    sims = np.array([s for _, s in cands], dtype=np.float32)
+    thr = np.quantile(sims, q)  # локальный порог (квантиль)
+    sel = [(j, s) for j, s in cands if s >= thr]
+    # ограничиваем диапазон
+    sel = sorted(sel, key=lambda x: -x[1])[:max_k]
+    # при недостатке — добираем лучшими невзаимными (мягкий fallback)
+    if len(sel) < min_k:
+        extra_top = [t for t in np.argsort(-scores_row) if int(idx_row[t]) not in {j for j,_ in sel}]
+        for t in extra_top:
+            sel.append((int(idx_row[t]), float(scores_row[t])))
+            if len(sel) >= min_k:
+                break
+    return sel
+
+def get_pos_neg_edges(edge_index, num_nodes, neg_ratio=1.0):
+    """Get positive and negative edges for training"""
+    # Позитивы — текущие очищенные рёбра
+    pos = edge_index
+    # Негативы — случайные ненаблюдаемые пары
+    num_neg = int(pos.size(1) * neg_ratio)
+    neg = negative_sampling(pos, num_nodes=num_nodes, num_neg_samples=num_neg, method='sparse')
+    return pos, neg
+
+def gcn_based_clustering(
+    X: np.ndarray,
+    valid_paths: List[str],
+    K: int = 50,
+    min_k: int = 5,
+    max_k: int = 25,
+    q: float = 0.75,
+    epochs: int = 50,
+    threshold: float = 0.5,
+    progress_callback=None
+) -> Dict[int, List[int]]:
+    """
+    GCN-based face clustering using link prediction
+    
+    Args:
+        X: Face embeddings [N, D]
+        valid_paths: List of image paths
+        K: Number of nearest neighbors for kNN graph
+        min_k: Minimum number of edges per node
+        max_k: Maximum number of edges per node
+        q: Quantile threshold for edge selection
+        epochs: Number of training epochs
+        threshold: Probability threshold for final clustering
+        progress_callback: Progress callback function
+    
+    Returns:
+        Dictionary mapping cluster_id to list of node indices
+    """
+    if not _TORCH_OK or not _TORCH_GEOMETRIC_OK or not _FAISS_OK or not _NX_OK:
+        if progress_callback:
+            progress_callback("❌ GCN clustering requires torch, torch_geometric, faiss, and networkx", 100)
+        return {}
+    
+    N, D = X.shape
+    
+    if progress_callback:
+        progress_callback(f"🔍 Building kNN graph for {N} faces...", 10)
+    
+    # 1) Build kNN graph using FAISS
+    index = faiss.IndexFlatIP(D)
+    index.add(X)
+    scores, knn_idx = index.search(X, K+1)  # +1, т.к. нулевой — сам объект
+    scores = scores[:, 1:]  # отбрасываем self-match
+    knn_idx = knn_idx[:, 1:]
+    
+    # Build neighbors sets
+    neighbors = [set(knn_idx[i].tolist()) for i in range(N)]
+    
+    if progress_callback:
+        progress_callback("🔗 Building mutual kNN mask...", 20)
+    
+    # 2) Build mutual kNN mask
+    mutual_sets = build_mutual_mask(neighbors)
+    
+    if progress_callback:
+        progress_callback("⚡ Selecting adaptive edges...", 30)
+    
+    # 3) Adaptive edge selection
+    edges = []
+    edge_w = []
+    for i in range(N):
+        sel = adaptive_edges(scores[i], knn_idx[i], mutual_sets[i], min_k=min_k, max_k=max_k, q=q)
+        for j, s in sel:
+            edges.append([i, j])
+            edge_w.append(s)
+    
+    edge_index = torch.tensor(edges, dtype=torch.long).T  # [2, E]
+    edge_attr = torch.tensor(edge_w, dtype=torch.float32) # косинусные похожести
+    
+    # Make graph undirected
+    edge_index = to_undirected(edge_index, num_nodes=N)
+    
+    if progress_callback:
+        progress_callback("🧠 Initializing GCN model...", 40)
+    
+    # 4) Initialize GCN model
+    X_t = torch.tensor(X, dtype=torch.float32)
+    data = Data(x=X_t, edge_index=edge_index)
+    
+    encoder = GCNEncoder(D, hid=256, out=128, dropout=0.2)
+    pred = DotProductLinkPredictor()
+    opt = torch.optim.Adam(list(encoder.parameters())+list(pred.parameters()), lr=1e-3, weight_decay=1e-4)
+    bce = nn.BCEWithLogitsLoss()
+    
+    if progress_callback:
+        progress_callback(f"🎯 Training GCN for {epochs} epochs...", 50)
+    
+    # 5) Train GCN
+    for epoch in range(epochs):
+        encoder.train()
+        pred.train()
+        opt.zero_grad()
+        z = encoder(data.x, data.edge_index)
+        pos, neg = get_pos_neg_edges(data.edge_index, N, neg_ratio=1.0)
+        pos_logits = pred(z, pos)
+        neg_logits = pred(z, neg)
+        y_pos = torch.ones_like(pos_logits)
+        y_neg = torch.zeros_like(neg_logits)
+        loss = bce(pos_logits, y_pos) + bce(neg_logits, y_neg)
+        loss.backward()
+        opt.step()
+        
+        if progress_callback and (epoch+1) % 10 == 0:
+            progress_callback(f"📊 Epoch {epoch+1}: loss={loss.item():.4f}", 50 + (epoch+1) * 0.4)
+    
+    if progress_callback:
+        progress_callback("🔮 Predicting link probabilities...", 90)
+    
+    # 6) Inference: predict probabilities for all candidate edges
+    cand_src, cand_dst, cand_score = [], [], []
+    for i in range(N):
+        for j, s in zip(knn_idx[i], scores[i]):
+            if i == j: 
+                continue
+            cand_src.append(i)
+            cand_dst.append(int(j))
+            cand_score.append(float(s))
+    cand_eidx = torch.tensor([cand_src, cand_dst], dtype=torch.long)
+    
+    encoder.eval()
+    pred.eval()
+    with torch.no_grad():
+        z = encoder(data.x, data.edge_index)
+        logits = pred(z, cand_eidx)
+        probs = torch.sigmoid(logits).cpu().numpy()
+    
+    if progress_callback:
+        progress_callback("🔗 Building final graph...", 95)
+    
+    # 7) Build final graph and find connected components
+    G = nx.Graph()
+    G.add_nodes_from(range(N))
+    for (i, j), p in zip(zip(cand_src, cand_dst), probs):
+        if p >= threshold:
+            G.add_edge(i, j, w=float(p))
+    
+    components = list(nx.connected_components(G))
+    clusters = {idx: cid for cid, comp in enumerate(components) for idx in comp}
+    
+    if progress_callback:
+        progress_callback(f"✅ GCN clustering complete: {len(components)} clusters found", 100)
+    
+    # Convert to the expected format
+    result = {}
+    for cid, comp in enumerate(components):
+        result[cid] = list(comp)
+    
+    return result
+
+# -------------------------------
 # Public API: build_plan_live (Hi-Precision)
 # -------------------------------
+
+def build_plan_live_gcn(
+    input_dir: Path,
+    det_size=(640, 640),
+    min_score: float = 0.5,
+    K: int = 50,
+    min_k: int = 5,
+    max_k: int = 25,
+    q: float = 0.75,
+    epochs: int = 50,
+    threshold: float = 0.5,
+    providers: List[str] = ("CPUExecutionProvider",),
+    progress_callback=None,
+    include_excluded: bool = False,
+):
+    """
+    GCN-based face clustering using link prediction approach
+    
+    Args:
+        input_dir: Directory containing images
+        det_size: Detection size for InsightFace
+        min_score: Minimum detection score
+        K: Number of nearest neighbors for kNN graph
+        min_k: Minimum number of edges per node
+        max_k: Maximum number of edges per node
+        q: Quantile threshold for edge selection
+        epochs: Number of GCN training epochs
+        threshold: Probability threshold for final clustering
+        providers: ONNX providers
+        progress_callback: Progress callback function
+        include_excluded: Whether to include excluded folders
+    
+    Returns:
+        Dictionary with clustering results
+    """
+    input_dir = Path(input_dir)
+    
+    if progress_callback:
+        progress_callback(f"📂 Scanning directory: {input_dir}", 1)
+    
+    # Collect images
+    if include_excluded:
+        all_images = [p for p in input_dir.rglob('*') if is_image(p)]
+    else:
+        all_images = [p for p in input_dir.rglob('*') if is_image(p) and not any(ex in str(p).lower() for ex in EXCLUDED_NAMES)]
+    
+    if progress_callback:
+        progress_callback(f"📷 Found {len(all_images)} images", 5)
+    
+    if len(all_images) == 0:
+        if progress_callback:
+            progress_callback("⚠️ No images found for clustering", 100)
+        return {
+            "clusters": {},
+            "plan": [],
+            "unreadable": [],
+            "no_faces": [],
+        }
+    
+    # Initialize InsightFace
+    if not _INSIGHTFACE_OK:
+        if progress_callback:
+            progress_callback("❌ InsightFace not available", 100)
+        return {
+            "clusters": {},
+            "plan": [],
+            "unreadable": [str(p) for p in all_images],
+            "no_faces": [],
+            "error": "InsightFace not available"
+        }
+    
+    try:
+        app = FaceAnalysis(name="buffalo_l", providers=providers)
+        app.prepare(ctx_id=0, det_size=det_size)
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"❌ Failed to initialize InsightFace: {str(e)}", 100)
+        return {
+            "clusters": {},
+            "plan": [],
+            "unreadable": [str(p) for p in all_images],
+            "no_faces": [],
+            "error": str(e)
+        }
+    
+    # Extract embeddings
+    if progress_callback:
+        progress_callback("🔍 Extracting face embeddings...", 10)
+    
+    embs = []
+    valid_paths = []
+    unreadable = []
+    no_faces = []
+    
+    for i, img_path in enumerate(all_images):
+        try:
+            emb = load_face_embedding_gcn(str(img_path), app)
+            if emb is not None:
+                embs.append(emb)
+                valid_paths.append(str(img_path))
+            else:
+                no_faces.append(str(img_path))
+        except Exception as e:
+            unreadable.append(str(img_path))
+        
+        if progress_callback and (i + 1) % 10 == 0:
+            progress_callback(f"📊 Processed {i + 1}/{len(all_images)} images", 10 + (i + 1) * 0.3)
+    
+    if len(embs) == 0:
+        if progress_callback:
+            progress_callback("⚠️ No faces found for clustering", 100)
+        return {
+            "clusters": {},
+            "plan": [],
+            "unreadable": [str(p) for p in unreadable],
+            "no_faces": [str(p) for p in no_faces],
+        }
+    
+    X = np.stack(embs)  # [N, D]
+    
+    if progress_callback:
+        progress_callback(f"✅ Extracted {X.shape[0]} face embeddings", 40)
+    
+    # GCN-based clustering
+    clusters_idx = gcn_based_clustering(
+        X=X,
+        valid_paths=valid_paths,
+        K=K,
+        min_k=min_k,
+        max_k=max_k,
+        q=q,
+        epochs=epochs,
+        threshold=threshold,
+        progress_callback=progress_callback
+    )
+    
+    if not clusters_idx:
+        if progress_callback:
+            progress_callback("❌ GCN clustering failed", 100)
+        return {
+            "clusters": {},
+            "plan": [],
+            "unreadable": [str(p) for p in unreadable],
+            "no_faces": [str(p) for p in no_faces],
+            "error": "GCN clustering failed"
+        }
+    
+    # Convert to the expected format
+    cluster_map: Dict[int, Set[Path]] = defaultdict(set)
+    cluster_by_img: Dict[Path, Set[int]] = defaultdict(set)
+    
+    for cluster_id, node_indices in clusters_idx.items():
+        for idx in node_indices:
+            p = Path(valid_paths[idx])
+            cluster_map[cluster_id].add(p)
+            cluster_by_img[p].add(cluster_id)
+    
+    # Build plan
+    if progress_callback:
+        progress_callback("📦 Building distribution plan...", 95)
+    
+    plan = []
+    seen = set()
+    
+    for img_path in all_images:
+        if img_path in seen:
+            continue
+        seen.add(img_path)
+        
+        if img_path in cluster_by_img:
+            cluster_ids = cluster_by_img[img_path]
+            if len(cluster_ids) == 1:
+                # Single cluster - move
+                cluster_id = list(cluster_ids)[0]
+                plan.append({
+                    "action": "move",
+                    "src": str(img_path),
+                    "dst": str(input_dir / f"{cluster_id}")
+                })
+            else:
+                # Multiple clusters - copy to each, then delete original
+                for cluster_id in cluster_ids:
+                    plan.append({
+                        "action": "copy",
+                        "src": str(img_path),
+                        "dst": str(input_dir / f"{cluster_id}")
+                    })
+                plan.append({
+                    "action": "delete",
+                    "src": str(img_path)
+                })
+        else:
+            # No faces found
+            no_faces.append(str(img_path))
+    
+    if progress_callback:
+        progress_callback("✅ GCN clustering complete!", 100)
+    
+    return {
+        "clusters": {str(k): [str(p) for p in v] for k, v in cluster_map.items()},
+        "plan": plan,
+        "unreadable": [str(p) for p in unreadable],
+        "no_faces": [str(p) for p in no_faces],
+    }
 
 def build_plan_live(
     input_dir: Path,
@@ -1655,11 +2099,29 @@ def build_plan_live(
     t_strict: float = T_STRICT,
     t_member: float = T_MEMBER,
     t_merge: float = T_MERGE,
+    use_gcn: bool = True,  # New parameter to choose clustering method
 ):
     """
     Hi-Precision версия build_plan_live: без O(N^2), с графовой кластеризацией и медиоидной фильтрацией.
     Возвращает словарь с ключами: clusters, plan, unreadable, no_faces.
     """
+    # Use GCN-based clustering if requested and available
+    if use_gcn and _TORCH_OK and _TORCH_GEOMETRIC_OK and _FAISS_OK and _NX_OK:
+        if progress_callback:
+            progress_callback("🧠 Using GCN-based clustering...", 0)
+        return build_plan_live_gcn(
+            input_dir=input_dir,
+            det_size=det_size,
+            min_score=min_score,
+            providers=providers,
+            progress_callback=progress_callback,
+            include_excluded=include_excluded,
+        )
+    
+    # Fallback to traditional clustering
+    if progress_callback:
+        progress_callback("🔄 Using traditional clustering...", 0)
+    
     input_dir = Path(input_dir)
     if include_excluded:
         all_images = [p for p in input_dir.rglob('*') if is_image(p)]

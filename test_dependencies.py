@@ -61,6 +61,20 @@ def test_imports():
     except ImportError:
         print("⚠️ NetworkX не установлен (опционально)")
     
+    # Проверяем PyTorch
+    try:
+        import torch
+        print("✅ PyTorch доступен:", torch.__version__)
+    except ImportError:
+        print("⚠️ PyTorch не установлен (опционально)")
+    
+    # Проверяем PyTorch Geometric
+    try:
+        import torch_geometric
+        print("✅ PyTorch Geometric доступен:", torch_geometric.__version__)
+    except ImportError:
+        print("⚠️ PyTorch Geometric не установлен (опционально)")
+    
     print("\n🎉 Все основные зависимости работают!")
     return True
 
@@ -69,12 +83,23 @@ def test_cluster_module():
     print("\n🔍 Тестирование модуля cluster...")
     
     try:
-        from cluster import build_plan_live, _INSIGHTFACE_OK
+        from cluster import build_plan_live, build_plan_live_gcn, _INSIGHTFACE_OK, _TORCH_OK, _TORCH_GEOMETRIC_OK, _FAISS_OK, _NX_OK
         print("✅ Модуль cluster импортирован")
         print(f"✅ InsightFace статус: {_INSIGHTFACE_OK}")
+        print(f"✅ PyTorch статус: {_TORCH_OK}")
+        print(f"✅ PyTorch Geometric статус: {_TORCH_GEOMETRIC_OK}")
+        print(f"✅ FAISS статус: {_FAISS_OK}")
+        print(f"✅ NetworkX статус: {_NX_OK}")
+        
+        gcn_available = _TORCH_OK and _TORCH_GEOMETRIC_OK and _FAISS_OK and _NX_OK
+        print(f"🎯 GCN-based кластеризация доступна: {gcn_available}")
         
         if _INSIGHTFACE_OK:
             print("✅ Готов к кластеризации лиц")
+            if gcn_available:
+                print("✅ Готов к GCN-based кластеризации")
+            else:
+                print("⚠️ GCN-based кластеризация недоступна (используется традиционный алгоритм)")
         else:
             print("❌ InsightFace недоступен")
             return False

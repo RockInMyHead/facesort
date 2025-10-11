@@ -12,12 +12,19 @@ def test_clustering():
     print("🔍 Тестирование алгоритма кластеризации...")
     
     try:
-        from cluster import build_plan_live, denmune_cluster, karate_club_cluster, _DENMUNE_OK, _KARATECLUB_OK
+        from cluster import build_plan_live, build_plan_live_gcn, denmune_cluster, karate_club_cluster, _DENMUNE_OK, _KARATECLUB_OK, _TORCH_OK, _TORCH_GEOMETRIC_OK, _FAISS_OK, _NX_OK
         print("✅ Модуль cluster импортирован")
         
         # Проверяем доступность новых библиотек
         print(f"🔬 DenMune доступен: {_DENMUNE_OK}")
         print(f"🥋 Karate Club доступен: {_KARATECLUB_OK}")
+        print(f"🧠 PyTorch доступен: {_TORCH_OK}")
+        print(f"🔗 PyTorch Geometric доступен: {_TORCH_GEOMETRIC_OK}")
+        print(f"⚡ FAISS доступен: {_FAISS_OK}")
+        print(f"🕸️ NetworkX доступен: {_NX_OK}")
+        
+        gcn_available = _TORCH_OK and _TORCH_GEOMETRIC_OK and _FAISS_OK and _NX_OK
+        print(f"🎯 GCN-based кластеризация доступна: {gcn_available}")
         
     except ImportError as e:
         print(f"❌ Ошибка импорта: {e}")
@@ -74,6 +81,11 @@ def test_clustering():
         
         print("\n✅ Кластеризация завершена успешно!")
         
+        # Тестируем GCN-based алгоритм если доступен
+        if gcn_available:
+            print("\n🧠 Тестирование GCN-based кластеризации...")
+            test_gcn_clustering(test_dir, progress_callback)
+        
         # Тестируем новые методы кластеризации отдельно
         print("\n🧪 Тестирование новых методов кластеризации...")
         test_new_clustering_methods()
@@ -86,6 +98,50 @@ def test_clustering():
         traceback.print_exc()
         return False
 
+
+def test_gcn_clustering(test_dir, progress_callback):
+    """Тестируем GCN-based кластеризацию"""
+    try:
+        from cluster import build_plan_live_gcn
+        
+        print("🧠 Запуск GCN-based кластеризации...")
+        result = build_plan_live_gcn(
+            test_dir,
+            progress_callback=progress_callback,
+            K=20,  # Меньше для тестов
+            epochs=10,  # Меньше для тестов
+            threshold=0.5
+        )
+        
+        print("\n📊 Результаты GCN кластеризации:")
+        print(f"  - Кластеров найдено: {len(result.get('clusters', {}))}")
+        print(f"  - Файлов в плане: {len(result.get('plan', []))}")
+        print(f"  - Нечитаемых файлов: {len(result.get('unreadable', []))}")
+        print(f"  - Файлов без лиц: {len(result.get('no_faces', []))}")
+        
+        if 'error' in result:
+            print(f"❌ Ошибка GCN: {result['error']}")
+            return False
+        
+        # Показываем детали кластеров
+        clusters = result.get('clusters', {})
+        if clusters:
+            print("\n📁 Детали GCN кластеров:")
+            for cluster_id, files in clusters.items():
+                print(f"  Кластер {cluster_id}: {len(files)} файлов")
+                for file_path in files[:3]:  # Показываем первые 3 файла
+                    print(f"    - {Path(file_path).name}")
+                if len(files) > 3:
+                    print(f"    ... и еще {len(files) - 3} файлов")
+        
+        print("\n✅ GCN кластеризация завершена успешно!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка при GCN кластеризации: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 def test_new_clustering_methods():
     """Тестируем новые методы кластеризации на синтетических данных"""
