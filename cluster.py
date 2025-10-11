@@ -1698,28 +1698,39 @@ def hi_precision_cluster(
 # GCN-based Face Clustering Classes
 # -------------------------------
 
-class GCNEncoder(nn.Module):
-    """GCN Encoder for face embeddings"""
-    def __init__(self, in_dim, hid=256, out=128, dropout=0.2):
-        super().__init__()
-        self.conv1 = GCNConv(in_dim, hid)
-        self.conv2 = GCNConv(hid, out)
-        self.dropout = dropout
-        
-    def forward(self, x, edge_index):
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.conv2(x, edge_index)
-        return x
+# Define GCN classes only if PyTorch is available
+if _TORCH_OK and _TORCH_GEOMETRIC_OK:
+    class GCNEncoder(nn.Module):
+        """GCN Encoder for face embeddings"""
+        def __init__(self, in_dim, hid=256, out=128, dropout=0.2):
+            super().__init__()
+            self.conv1 = GCNConv(in_dim, hid)
+            self.conv2 = GCNConv(hid, out)
+            self.dropout = dropout
+            
+        def forward(self, x, edge_index):
+            x = self.conv1(x, edge_index)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+            x = self.conv2(x, edge_index)
+            return x
 
-class DotProductLinkPredictor(nn.Module):
-    """Link Predictor using dot product"""
-    def forward(self, z, edges):
-        # edges: [2, M]; score = z_i · z_j
-        z_i = z[edges[0]]
-        z_j = z[edges[1]]
-        return (z_i * z_j).sum(dim=-1)
+    class DotProductLinkPredictor(nn.Module):
+        """Link Predictor using dot product"""
+        def forward(self, z, edges):
+            # edges: [2, M]; score = z_i · z_j
+            z_i = z[edges[0]]
+            z_j = z[edges[1]]
+            return (z_i * z_j).sum(dim=-1)
+else:
+    # Dummy classes when PyTorch is not available
+    class GCNEncoder:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch and PyTorch Geometric are required for GCN functionality")
+    
+    class DotProductLinkPredictor:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch and PyTorch Geometric are required for GCN functionality")
 
 class GCNClusteringEngine:
     """GCN-based clustering engine with optimized operations"""
@@ -1775,6 +1786,9 @@ class GCNClusteringEngine:
     @staticmethod
     def get_pos_neg_edges(edge_index, num_nodes, neg_ratio=1.0):
         """Get positive and negative edges for training"""
+        if not _TORCH_OK or not _TORCH_GEOMETRIC_OK:
+            raise ImportError("PyTorch and PyTorch Geometric are required for GCN functionality")
+        
         # Позитивы — текущие очищенные рёбра
         pos = edge_index
         # Негативы — случайные ненаблюдаемые пары
@@ -1794,6 +1808,8 @@ def adaptive_edges(scores_row: np.ndarray, idx_row: np.ndarray, mutual_set: set,
     return GCNClusteringEngine.adaptive_edges(scores_row, idx_row, mutual_set, min_k, max_k, q)
 
 def get_pos_neg_edges(edge_index, num_nodes, neg_ratio=1.0):
+    if not _TORCH_OK or not _TORCH_GEOMETRIC_OK:
+        raise ImportError("PyTorch and PyTorch Geometric are required for GCN functionality")
     return GCNClusteringEngine.get_pos_neg_edges(edge_index, num_nodes, neg_ratio)
 
 def gcn_based_clustering(
