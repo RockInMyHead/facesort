@@ -693,8 +693,8 @@ def process_group_folder(group_dir: Path, progress_callback=None, include_exclud
         print(f"🔍 Обрабатывается подпапка [{call_id}]: {subfolder}")
         plan = build_plan_live(subfolder, progress_callback=progress_callback)
         print(f"📊 Кластеров: {len(plan.get('clusters', {}))}, файлов: {len(plan.get('plan', []))}")
-        moved, copied, cluster_counter = distribute_to_folders(
-            plan, subfolder, cluster_start=cluster_counter, progress_callback=progress_callback
+        moved, copied, _ = distribute_to_folders(
+            plan, subfolder, cluster_start=1, progress_callback=progress_callback
         )
 
 
