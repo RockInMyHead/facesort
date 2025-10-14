@@ -38,6 +38,11 @@ pip install -r requirements.txt
 
 # Вариант 2: Windows-совместимая версия (рекомендуется)
 pip install -r requirements-windows.txt
+
+# Если ошибка кодировки, используйте:
+pip install -r requirements-minimal.txt
+# или
+pip install fastapi uvicorn python-multipart pydantic pillow psutil numpy opencv-python scikit-learn hdbscan mediapipe
 ```
 
 ### 2. Запуск приложения

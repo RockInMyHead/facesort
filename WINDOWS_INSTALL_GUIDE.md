@@ -22,7 +22,14 @@
 
 3. **Установите Windows-совместимые зависимости:**
    ```bash
+   # Вариант 1: С версиями (может быть проблема с кодировкой)
    pip install -r requirements-windows.txt
+   
+   # Вариант 2: Минимальные зависимости (если проблема с кодировкой)
+   pip install -r requirements-minimal.txt
+   
+   # Вариант 3: Установка по одной (если файлы не читаются)
+   pip install fastapi uvicorn python-multipart pydantic pillow psutil numpy opencv-python scikit-learn hdbscan mediapipe
    ```
 
 4. **Запустите Windows-версию:**
@@ -144,6 +151,18 @@ pip install dlib-binary
 
 # Решение 3: Используйте Windows-версию
 python main-windows.py
+```
+
+### Ошибка: "UnicodeDecodeError: 'charmap' codec can't decode"
+```bash
+# Решение 1: Используйте минимальные зависимости
+pip install -r requirements-minimal.txt
+
+# Решение 2: Установите пакеты по одному
+pip install fastapi uvicorn python-multipart pydantic pillow psutil numpy opencv-python scikit-learn hdbscan mediapipe
+
+# Решение 3: Установите с указанием кодировки
+pip install -r requirements-windows.txt --no-cache-dir
 ```
 
 ## 🔍 Проверка установки
