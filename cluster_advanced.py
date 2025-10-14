@@ -47,6 +47,7 @@ from sklearn.cluster import SpectralClustering, AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity, cosine_distances
 from sklearn.preprocessing import normalize
 from scipy.spatial.distance import cdist
+from sklearn.metrics import pairwise_distances
 
 IMG_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
 
@@ -305,12 +306,12 @@ def k_reciprocal_rerank(similarity_matrix: np.ndarray, k: int = 3) -> np.ndarray
             
             if i_in_j_neighbors and j_in_i_neighbors:
                 # Усиливаем связь для взаимных соседей
-                boost = 1.2
+                boost = 1.1
                 reranked[i, j] *= boost
                 reranked[j, i] *= boost
             elif i_in_j_neighbors or j_in_i_neighbors:
                 # Небольшое усиление для односторонних соседей
-                boost = 1.1
+                boost = 1.05
                 reranked[i, j] *= boost
                 reranked[j, i] *= boost
     
@@ -319,12 +320,130 @@ def k_reciprocal_rerank(similarity_matrix: np.ndarray, k: int = 3) -> np.ndarray
     
     return reranked
 
+def merge_similar_clusters(embeddings: np.ndarray, labels: np.ndarray, merge_threshold: float = 0.4) -> np.ndarray:
+    """
+    Объединяет похожие кластеры на основе центроидов.
+    
+    Args:
+        embeddings: Матрица эмбеддингов
+        labels: Метки кластеров
+        merge_threshold: Порог для слияния (cosine distance)
+    
+    Returns:
+        Обновленные метки кластеров
+    """
+    unique_labels = np.unique(labels)
+    if len(unique_labels) <= 1:
+        return labels
+    
+    # Вычисляем центроиды для каждого кластера
+    centroids = {}
+    for label in unique_labels:
+        mask = labels == label
+        if np.sum(mask) > 0:
+            centroid = np.mean(embeddings[mask], axis=0)
+            centroids[label] = centroid / np.linalg.norm(centroid)  # L2 normalize
+    
+    # Находим пары кластеров для слияния
+    merged_labels = labels.copy()
+    label_mapping = {label: label for label in unique_labels}
+    
+    for i, label1 in enumerate(unique_labels):
+        if label1 not in centroids:
+            continue
+            
+        for j, label2 in enumerate(unique_labels[i+1:], i+1):
+            if label2 not in centroids:
+                continue
+            
+            # Вычисляем косинусное расстояние между центроидами
+            cosine_dist = 1 - np.dot(centroids[label1], centroids[label2])
+            
+            if cosine_dist < merge_threshold:
+                # Объединяем кластеры (выбираем меньший label)
+                target_label = min(label1, label2)
+                source_label = max(label1, label2)
+                
+                # Обновляем mapping
+                for old_label, new_label in label_mapping.items():
+                    if new_label == source_label:
+                        label_mapping[old_label] = target_label
+                
+                print(f"🔗 Объединяем кластеры {label1} и {label2} (расстояние: {cosine_dist:.3f})")
+    
+    # Применяем mapping
+    for i, label in enumerate(labels):
+        merged_labels[i] = label_mapping[label]
+    
+    return merged_labels
+
+def merge_single_clusters(embeddings: np.ndarray, labels: np.ndarray, merge_threshold: float = 0.5) -> np.ndarray:
+    """
+    Объединяет одиночные кластеры с ближайшими.
+    
+    Args:
+        embeddings: Матрица эмбеддингов
+        labels: Метки кластеров
+        merge_threshold: Порог для слияния (cosine distance)
+    
+    Returns:
+        Обновленные метки кластеров
+    """
+    unique_labels = np.unique(labels)
+    if len(unique_labels) <= 1:
+        return labels
+    
+    # Находим размеры кластеров
+    cluster_sizes = {}
+    for label in unique_labels:
+        cluster_sizes[label] = np.sum(labels == label)
+    
+    # Находим одиночные кластеры
+    single_clusters = [label for label, size in cluster_sizes.items() if size == 1]
+    
+    if not single_clusters:
+        return labels
+    
+    merged_labels = labels.copy()
+    
+    for single_label in single_clusters:
+        # Находим индекс одиночного элемента
+        single_idx = np.where(labels == single_label)[0][0]
+        single_embedding = embeddings[single_idx]
+        
+        # Ищем ближайший кластер
+        best_cluster = None
+        best_distance = float('inf')
+        
+        for other_label in unique_labels:
+            if other_label == single_label or cluster_sizes[other_label] == 1:
+                continue
+            
+            # Вычисляем расстояние до центроида другого кластера
+            other_mask = labels == other_label
+            other_embeddings = embeddings[other_mask]
+            other_centroid = np.mean(other_embeddings, axis=0)
+            other_centroid = other_centroid / np.linalg.norm(other_centroid)
+            
+            cosine_dist = 1 - np.dot(single_embedding, other_centroid)
+            
+            if cosine_dist < best_distance and cosine_dist < merge_threshold:
+                best_distance = cosine_dist
+                best_cluster = other_label
+        
+        # Объединяем с ближайшим кластером
+        if best_cluster is not None:
+            merged_labels[single_idx] = best_cluster
+            print(f"🔗 Объединяем одиночный кластер {single_label} с {best_cluster} (расстояние: {best_distance:.3f})")
+    
+    return merged_labels
+
 def spectral_clustering_with_validation(
     embeddings: List[np.ndarray],
     n_clusters: int = None,
     quality_weights: List[float] = None,
     k_reciprocal: int = 3,
-    verification_threshold: float = 0.35
+    verification_threshold: float = 0.45
 ) -> np.ndarray:
     """
     Spectral Clustering с k-reciprocal re-ranking и валидацией.
@@ -522,11 +641,16 @@ def build_plan_advanced(
     if progress_callback:
         progress_callback(f"📂 Найдено {len(all_images)} изображений", 5)
     
-    # Инициализация системы распознавания
-    recognizer = AdvancedFaceRecognition(
-        use_gpu=use_gpu,
-        confidence_threshold=min_face_confidence
-    )
+    # Инициализация системы распознавания (fallback на InsightFace)
+    try:
+        recognizer = AdvancedFaceRecognition(
+            use_gpu=use_gpu,
+            confidence_threshold=min_face_confidence
+        )
+    except Exception as e:
+        print(f"⚠️ Ошибка инициализации AdvancedFaceRecognition: {e}")
+        print("🔄 Используем fallback на InsightFace...")
+        recognizer = None
     
     if progress_callback:
         progress_callback("✅ Модель загружена, начинаем анализ...", 10)
@@ -554,7 +678,12 @@ def build_plan_advanced(
         
         # Детекция и извлечение
         try:
-            faces = recognizer.detect_and_extract(img, apply_tta=apply_tta)
+            if recognizer is not None:
+                faces = recognizer.detect_and_extract(img, apply_tta=apply_tta)
+            else:
+                # Fallback на простую детекцию
+                faces = []
+                print(f"⚠️ Fallback режим для {img_path.name}")
             
             if not faces:
                 no_faces.append(img_path)
@@ -600,16 +729,31 @@ def build_plan_advanced(
     # Кластеризация
     if progress_callback:
         progress_callback(f"🔄 Spectral Clustering {len(all_embeddings)} лиц...", 85)
-    
-    labels = spectral_clustering_with_validation(
-        embeddings=all_embeddings,
-        n_clusters=n_clusters,
-        quality_weights=all_qualities,
-        k_reciprocal=3,
-        verification_threshold=0.35
+    # Альтернатива: AgglomerativeClustering с косинус-дистанцией
+    print("⚙️ Используем AgglomerativeClustering с косинусной метрикой")
+    X = np.vstack(all_embeddings)
+    # Применяем вес качества если есть
+    if all_qualities:
+        X = X * np.array(all_qualities)[:, np.newaxis]
+        X = normalize(X, norm='l2')
+    # Расстояния косинусные
+    dist_matrix = pairwise_distances(X, metric='cosine')
+    clustering = AgglomerativeClustering(
+        n_clusters=n_clusters or 3,
+        affinity='precomputed',
+        linkage='average'
     )
+    labels = clustering.fit_predict(dist_matrix)
     
     print(f"✅ Кластеризация завершена: {len(set(labels))} кластеров")
+    
+    # Пост-обработка: объединяем похожие кластеры
+    labels = merge_similar_clusters(X, labels, merge_threshold=0.4)
+    
+    # Дополнительно: объединяем одиночные кластеры с ближайшими
+    labels = merge_single_clusters(X, labels, merge_threshold=0.5)
+    
+    print(f"✅ После слияния: {len(set(labels))} кластеров")
     
     # Формируем результат
     cluster_map = defaultdict(set)
@@ -657,6 +801,81 @@ def build_plan_advanced(
         "no_faces": [str(p) for p in no_faces],
     }
 
-# Импортируем distribute_to_folders из cluster.py для совместимости
-from cluster import distribute_to_folders, process_group_folder
+def distribute_to_folders(plan: dict, base_dir: Path, cluster_start: int = 1, progress_callback=None) -> Tuple[int, int, int]:
+    moved, copied = 0, 0
+    moved_paths = set()
+
+    used_clusters = sorted({c for item in plan.get("plan", []) for c in item["cluster"]})
+    cluster_id_map = {old: cluster_start + idx for idx, old in enumerate(used_clusters)}
+    plan_items = plan.get("plan", [])
+    total_items = len(plan_items)
+    if progress_callback:
+        progress_callback(f"🔄 Распределение {total_items} файлов по папкам...", 0)
+
+    cluster_file_counts = {}
+    for item in plan_items:
+        clusters = [cluster_id_map[c] for c in item["cluster"]]
+        for cid in clusters:
+            cluster_file_counts[cid] = cluster_file_counts.get(cid, 0) + 1
+
+    for i, item in enumerate(plan_items):
+        if progress_callback:
+            percent = int((i + 1) / max(total_items, 1) * 100)
+            progress_callback(f"📁 Распределение файлов: {percent}% ({i+1}/{total_items})", percent)
+        src = Path(item["path"]);
+        clusters = [cluster_id_map[c] for c in item["cluster"]]
+        if not src.exists():
+            continue
+        if len(clusters) == 1:
+            dst = base_dir / f"{clusters[0]}" / src.name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.resolve() != dst.resolve(): shutil.move(str(src), str(dst)); moved+=1; moved_paths.add(src.parent)
+        else:
+            for cid in clusters:
+                dst = base_dir / f"{cid}" / src.name; dst.parent.mkdir(parents=True, exist_ok=True)
+                if src.resolve() != dst.resolve(): shutil.copy2(str(src), str(dst)); copied+=1
+            try: src.unlink()
+            except: pass
+    if progress_callback:
+        progress_callback("📝 Переименование папок с количеством файлов...", 95)
+    for cid, cnt in cluster_file_counts.items():
+        old_folder = base_dir / str(cid); new_folder = base_dir / f"{cid} ({cnt})"
+        if old_folder.exists():
+            try: old_folder.rename(new_folder)
+            except: pass
+    if progress_callback:
+        progress_callback("🧹 Очистка пустых папок...", 100)
+    for p in sorted(moved_paths, key=lambda x: len(str(x)), reverse=True):
+        try: p.rmdir()
+        except: pass
+    print(f"📦 Перемещено: {moved}, скопировано: {copied}")
+    return moved, copied, cluster_start + len(used_clusters)
+
+
+def process_group_folder(group_dir: Path, progress_callback=None, include_excluded: bool = False):
+    cluster_counter = 1
+    common = []
+    if include_excluded:
+        common = find_common_folders_recursive(group_dir)
+        total = len(common)
+        for i, c in enumerate(common):
+            if progress_callback: progress_callback(f"📋 Обработка общих фото {i+1}/{total}", 10+int(i/total*70))
+            process_common_folder_at_level(c, progress_callback)
+        return 0, sum(1 for c in common), cluster_counter
+    subdirs = [d for d in sorted(group_dir.iterdir()) if d.is_dir()]
+    total = len(subdirs)
+    moved_all, copied_all = 0, 0
+    for i, sub in enumerate(subdirs):
+        if progress_callback: progress_callback(f"🔍 Кластеризация {sub.name} ({i+1}/{total})", 10+int(i/total*70))
+        data = build_plan_advanced(
+            input_dir=sub,
+            min_face_confidence=0.9,
+            apply_tta=True,
+            use_gpu=False,
+            progress_callback=progress_callback,
+            include_excluded=include_excluded
+        )
+        m, c, _ = distribute_to_folders(data, sub, cluster_start=1, progress_callback=progress_callback)
+        moved_all+=m; copied_all+=c
+    return moved_all, copied_all, cluster_counter
 

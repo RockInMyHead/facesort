@@ -20,22 +20,16 @@ import tempfile
 import re
 from io import BytesIO
 
-from cluster import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS
-
-# Продвинутая кластеризация (опционально)
-USE_ADVANCED_CLUSTERING = os.environ.get("USE_ADVANCED_CLUSTERING", "false").lower() == "true"
 try:
-    from cluster_advanced import build_plan_advanced, AdvancedFaceRecognition
-    ADVANCED_AVAILABLE = True
-    if USE_ADVANCED_CLUSTERING:
-        print("✅ Используется ADVANCED кластеризация (InsightFace + Spectral Clustering)")
-    else:
-        print("ℹ️ Доступна ADVANCED кластеризация. Установите USE_ADVANCED_CLUSTERING=true для использования")
-except ImportError as e:
-    ADVANCED_AVAILABLE = False
-    USE_ADVANCED_CLUSTERING = False
-    print(f"ℹ️ ADVANCED кластеризация недоступна: {e}")
-    print("ℹ️ Установите зависимости: pip install -r requirements-advanced.txt")
+    from cluster_advanced import build_plan_advanced, distribute_to_folders, process_group_folder, IMG_EXTS
+    print("✅ Используется ADVANCED кластеризация")
+except Exception as e:
+    print(f"⚠️ Ошибка загрузки advanced модуля: {e}")
+    print("🔄 Переключаемся на SIMPLE кластеризацию...")
+    from cluster_simple import build_plan_simple as build_plan_advanced, distribute_to_folders, process_group_folder, IMG_EXTS
+
+# Продвинутая кластеризация (всегда включена)
+USE_ADVANCED_CLUSTERING = True
 
 app = FastAPI(title="Кластеризация лиц", description="API для кластеризации лиц и распределения по группам")
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)

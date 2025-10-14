@@ -195,7 +195,8 @@ class PhotoClusterApp {
     async loadDrives() {
         try {
             const response = await fetch('/api/drives', { cache: 'no-store' });
-            const drives = await response.json();
+            const data = await response.json();
+            const drives = data.drives || data; // Поддержка обеих форматов
             
             this.driveButtons.innerHTML = '';
             drives.forEach(drive => {
@@ -226,7 +227,14 @@ class PhotoClusterApp {
             const data = await response.json();
             
             this.currentPathEl.innerHTML = `<strong>Текущая папка:</strong> ${path}`;
-            await this.displayFolderContents(data.contents);
+            // Поддержка случаев без contents
+            const contents = data.contents || [];
+            if (!data.contents) {
+                // Формируем из папок и изображений
+                if (data.folders) contents.push(...data.folders.map(f=>({name:f.name,path:f.path,is_directory:true})));
+                if (data.images) contents.push(...data.images.map(i=>({name:i.name,path:i.path,is_directory:false})));
+            }
+            await this.displayFolderContents(contents);
             
             
             // Активируем кнопку ZIP и показываем панель инструментов
