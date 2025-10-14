@@ -1,0 +1,34 @@
+# Базовые зависимости
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+pillow==10.1.0
+psutil==5.9.6
+numpy==1.24.3
+opencv-python==4.8.1.78
+scikit-learn==1.3.2
+hdbscan==0.8.33
+
+# SOTA детекция и распознавание лиц
+insightface==0.7.3
+onnxruntime==1.16.3
+onnxruntime-gpu==1.16.3  # Опционально для GPU
+torch>=2.0.0
+torchvision>=0.15.0
+
+# RetinaFace для точной детекции
+retina-face==0.0.13
+
+# Дополнительные метрики и обработка
+scipy==1.11.4
+facenet-pytorch==2.5.3  # Для альтернативных эмбеддингов
+
+# Оценка качества изображений
+imutils==0.5.4
+
+# Старая версия для обратной совместимости
+face-recognition==1.3.0
+face-recognition-models==0.3.0
+dlib==19.24.6
+

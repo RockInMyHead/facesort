@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import json
+import functools
+import concurrent.futures
 import zipfile
 import shutil
 import asyncio
@@ -20,7 +22,23 @@ from io import BytesIO
 
 from cluster import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS
 
+# Продвинутая кластеризация (опционально)
+USE_ADVANCED_CLUSTERING = os.environ.get("USE_ADVANCED_CLUSTERING", "false").lower() == "true"
+try:
+    from cluster_advanced import build_plan_advanced, AdvancedFaceRecognition
+    ADVANCED_AVAILABLE = True
+    if USE_ADVANCED_CLUSTERING:
+        print("✅ Используется ADVANCED кластеризация (InsightFace + Spectral Clustering)")
+    else:
+        print("ℹ️ Доступна ADVANCED кластеризация. Установите USE_ADVANCED_CLUSTERING=true для использования")
+except ImportError as e:
+    ADVANCED_AVAILABLE = False
+    USE_ADVANCED_CLUSTERING = False
+    print(f"ℹ️ ADVANCED кластеризация недоступна: {e}")
+    print("ℹ️ Установите зависимости: pip install -r requirements-advanced.txt")
+
 app = FastAPI(title="Кластеризация лиц", description="API для кластеризации лиц и распределения по группам")
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 # CORS middleware для поддержки фронтенда
 app.add_middleware(
@@ -148,6 +166,7 @@ def get_folder_contents(path: Path) -> List[FolderInfo]:
         raise HTTPException(status_code=500, detail=f"Ошибка при чтении папки: {str(e)}")
 
 async def process_folder_task(task_id: str, folder_path: str, include_excluded: bool = False):
+    loop = asyncio.get_event_loop()
     """Фоновая задача обработки папки"""
     print(f"🔍 [TASK] process_folder_task запущена: task_id={task_id}, folder_path={folder_path}, include_excluded={include_excluded}")
     
@@ -174,10 +193,35 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
         app_state["current_tasks"][task_id]["message"] = "Кластеризуем лица..."
         
         print(f"🔍 [TASK] Проверяем путь: {folder_path}")
-        path = Path(folder_path)
+        # Пробуем точный путь, затем ищем подходящее название в родительской папке
+        import unicodedata, os
+        # Unicode NFKC нормализация
+        norm = unicodedata.normalize('NFKC', folder_path)
+        # Пробуем прямой путь
+        path = Path(norm)
         if not path.exists():
-            print(f"❌ [TASK] Путь не существует: {folder_path}")
-            raise Exception("Путь не существует")
+            # Определяем существующий предок
+            parts = norm.split(os.sep)
+            for i in range(len(parts)-1, 0, -1):
+                parent = Path(os.sep.join(parts[:i]))
+                if parent.exists(): break
+            else:
+                parent = None
+            if parent and parent.exists():
+                target_name = parts[-1]
+                # Перебираем варианты в родительской папке
+                for child in parent.iterdir():
+                    # нормализуем имена
+                    child_n = unicodedata.normalize('NFKC', child.name)
+                    if child_n == target_name:
+                        path = child
+                        break
+                else:
+                    print(f"❌ [TASK] Не удалось найти подходящую папку в {parent}")
+                    raise Exception("Путь не существует")
+            else:
+                print(f"❌ [TASK] Нет существующего родителя для пути {norm}")
+                raise Exception("Путь не существует")
         print(f"✅ [TASK] Путь существует: {path}")
         
         # Определяем исключенные имена
@@ -269,13 +313,73 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
             app_state["current_tasks"][task_id]["message"] = "Кластеризация лиц..."
             await asyncio.sleep(2)
             app_state["current_tasks"][task_id]["progress"] = 75
-            plan = build_plan_live(path, progress_callback=progress_callback)
+            
+            # Выбор метода кластеризации
+            if USE_ADVANCED_CLUSTERING:
+                print(f"🚀 [TASK] Запускаю ADVANCED кластеризацию для {folder_path}")
+                # Используем продвинутую кластеризацию
+                try:
+                    # Используем functools.partial для передачи параметров
+                    clustering_func = functools.partial(
+                        build_plan_advanced,
+                        input_dir=path,
+                        min_face_confidence=0.9,
+                        apply_tta=True,
+                        use_gpu=False,
+                        progress_callback=progress_callback,
+                        include_excluded=include_excluded
+                    )
+                    plan = await loop.run_in_executor(executor, clustering_func)
+                except Exception as e:
+                    print(f"⚠️ Ошибка ADVANCED кластеризации, fallback на стандартную: {e}")
+                    plan = await loop.run_in_executor(
+                        executor,
+                        functools.partial(build_plan_live, path, progress_callback, include_excluded)
+                    )
+            else:
+                print(f"🚀 [TASK] Запускаю стандартную кластеризацию для {folder_path}")
+                # Стандартная кластеризация
+                try:
+                    plan = await loop.run_in_executor(
+                        executor,
+                        functools.partial(build_plan_live, path, progress_callback, include_excluded)
+                    )
+                except Exception as e:
+                    app_state["current_tasks"][task_id]["status"] = "error"
+                    app_state["current_tasks"][task_id]["error"] = str(e)
+                    return
+            
+            # Проверка результата
+            if not isinstance(plan, dict):
+                app_state["current_tasks"][task_id]["status"] = "completed"
+                app_state["current_tasks"][task_id]["progress"] = 100
+                app_state["current_tasks"][task_id]["message"] = "Нет данных для обработки"
+                return
             
             app_state["current_tasks"][task_id]["message"] = "Распределение по папкам..."
             app_state["current_tasks"][task_id]["progress"] = 90
             await asyncio.sleep(1)
             
-            moved, copied, next_cluster_id = distribute_to_folders(plan, path, progress_callback=progress_callback)
+            # Запуск distribute_to_folders в пуле процессов
+            try:
+                # Создаем callback для прогресса
+                def progress_callback(progress, message):
+                    if isinstance(progress, (int, float)):
+                        app_state["current_tasks"][task_id]["progress"] = int(90 + progress * 0.1)
+                    app_state["current_tasks"][task_id]["message"] = message
+                
+                moved, copied, next_cluster_id = await loop.run_in_executor(
+                    executor,
+                    distribute_to_folders,
+                    plan,
+                    Path(folder_path),
+                    1,
+                    progress_callback
+                )
+            except Exception as e:
+                app_state["current_tasks"][task_id]["status"] = "error"
+                app_state["current_tasks"][task_id]["error"] = str(e)
+                return
             
             result = ProcessingResult(
                 moved=moved,

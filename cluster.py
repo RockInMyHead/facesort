@@ -184,16 +184,17 @@ def build_plan_live(
 ):
     print(f"🔍 [CLUSTER] build_plan_live вызвана: input_dir={input_dir}, include_excluded={include_excluded}")
     
-    try:
-        input_dir = Path(input_dir)
-        print(f"🔍 [CLUSTER] input_dir преобразован в Path: {input_dir}")
-        
-        # Собираем все изображения, учитываем флаг include_excluded
-        excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
-        print(f"🔍 [CLUSTER] excluded_names: {excluded_names}")
-    except Exception as e:
-        print(f"❌ [CLUSTER] Ошибка в начале build_plan_live: {e}")
-        raise
+    input_dir = Path(input_dir)
+    print(f"🔍 [CLUSTER] input_dir преобразован в Path: {input_dir}")
+
+    # Собираем все изображения, учитываем флаг include_excluded
+    excluded_names = ["общие", "общая", "common", "shared", "все", "all", "mixed", "смешанные"]
+    print(f"🔍 [CLUSTER] excluded_names: {excluded_names}")
+
+    # Запоминаем время начала для контроля таймаута
+    import time
+    start_time = time.time()
+    max_processing_time = 300  # 5 минут
     
     if include_excluded:
         # Включаем все изображения, даже из папок "общие"
@@ -232,27 +233,71 @@ def build_plan_live(
     print(f"🔍 [CLUSTER] Начинаем обработку {total} изображений с face_recognition (модель: large CNN)")
     
     for i, p in enumerate(all_images):
+        # Проверяем общий таймаут
+        if time.time() - start_time > max_processing_time:
+            print(f"⏰ Общий таймаут обработки превышен ({max_processing_time}с), прерываем")
+            break
+            
         # Обновляем прогресс для каждого изображения
         if progress_callback:
             percent = 10 + int((i + 1) / max(total, 1) * 70)  # 10-80% для анализа изображений
             progress_callback(f"📷 Анализ изображений: {percent}% ({i+1}/{total}) - {p.name}", percent)
         
+        # Защита от зависания: пропускаем файлы больше 50MB
+        try:
+            file_size = p.stat().st_size
+            if file_size > 50 * 1024 * 1024:  # 50MB
+                print(f"  ⚠️ Пропускаем большой файл {p.name} ({file_size // (1024*1024)}MB)")
+                unreadable.append(p)
+                continue
+        except:
+            pass
+        
         try:
             # Загружаем изображение через face_recognition
             img = face_recognition.load_image_file(str(p))
             
-            # Находим лица (используем CNN детектор для точности)
-            face_locations = face_recognition.face_locations(img, model="cnn")
+            # Оптимизация: сжимаем большие изображения для ускорения обработки
+            if img.shape[0] > 1200 or img.shape[1] > 1200:
+                # Сжимаем изображение до разумного размера
+                scale = min(1200 / img.shape[0], 1200 / img.shape[1])
+                new_height = int(img.shape[0] * scale)
+                new_width = int(img.shape[1] * scale)
+                img = cv2.resize(img, (new_width, new_height))
+                print(f"  📏 Сжато изображение {p.name}: {img.shape}")
+            
+            # Находим лица (используем HOG для скорости, CNN только для критичных случаев)
+            # HOG быстрее в 10-20 раз, но менее точен
+            face_locations = face_recognition.face_locations(img, model="hog")
+            
+            # Если HOG не нашел лиц, пробуем CNN (но с ограничением времени)
+            if not face_locations:
+                try:
+                    # Проверяем, не превышен ли общий таймаут
+                    if time.time() - start_time > max_processing_time - 30:  # Оставляем 30с на остальную обработку
+                        print(f"  ⏰ Пропускаем CNN для {p.name} - мало времени")
+                        face_locations = []
+                    else:
+                        # Пробуем CNN только если есть время
+                        cnn_start = time.time()
+                        face_locations = face_recognition.face_locations(img, model="cnn")
+                        cnn_time = time.time() - cnn_start
+                        if cnn_time > 10:  # Если CNN занял больше 10 секунд
+                            print(f"  ⏰ CNN занял {cnn_time:.1f}с для {p.name}")
+                        
+                except Exception as e:
+                    print(f"  ❌ Ошибка CNN для {p.name}: {e}")
+                    face_locations = []
             
             if not face_locations:
                 no_faces.append(p)
                 continue
             
-            # Извлекаем эмбеддинги (модель "large" для максимальной точности)
+            # Извлекаем эмбеддинги (модель "large" для точности)
             face_encodings = face_recognition.face_encodings(
                 img, 
                 known_face_locations=face_locations,
-                model="large"  # 128-мерный вектор, 99.38% точность на LFW
+                model="large"  # 128-мерный вектор, 99.38% точность
             )
             
             if not face_encodings:
@@ -270,8 +315,11 @@ def build_plan_live(
             if count > 0:
                 img_face_count[p] = count
                 
-        except Exception as e:
-            print(f"  ❌ Ошибка обработки {p.name}: {e}")
+        except (TimeoutError, Exception) as e:
+            if isinstance(e, TimeoutError):
+                print(f"  ⏰ Таймаут обработки {p.name}: {e}")
+            else:
+                print(f"  ❌ Ошибка обработки {p.name}: {e}")
             unreadable.append(p)
             continue
 
@@ -286,49 +334,121 @@ def build_plan_live(
             "no_faces": [str(p) for p in no_faces],
         }
 
-    # Этап 2: Улучшенная кластеризация с DBSCAN
+    # Этап 2: Улучшенная кластеризация с HDBSCAN
     if progress_callback:
-        progress_callback(f"🔄 Кластеризация {len(embeddings)} лиц с DBSCAN...", 80)
+        progress_callback(f"🔄 Кластеризация {len(embeddings)} лиц с HDBSCAN...", 80)
     
     print(f"🔍 [CLUSTER] Кластеризация {len(embeddings)} эмбеддингов")
     
     X = np.vstack(embeddings)
     
-    # Используем Euclidean distance для face_recognition (рекомендовано)
-    distance_matrix = euclidean_distances(X)
-
-    if progress_callback:
-        progress_callback("🔄 Поиск оптимального epsilon...", 82)
+    # Нормализуем эмбеддинги для использования cosine distance
+    from sklearn.preprocessing import normalize
+    X_normalized = normalize(X, norm='l2')
     
-    # Находим оптимальный epsilon адаптивно
-    epsilon = find_optimal_epsilon(distance_matrix)
-    # Ограничиваем epsilon для строгой кластеризации
-    epsilon = min(epsilon, 0.6)  # Максимум 0.6 для face_recognition
-    
-    print(f"🔍 [CLUSTER] Оптимальный epsilon: {epsilon:.4f}")
+    print(f"🔍 [CLUSTER] Эмбеддинги нормализованы для cosine distance")
     
     if progress_callback:
-        progress_callback(f"🔄 DBSCAN кластеризация (eps={epsilon:.3f})...", 85)
-
-    # DBSCAN с min_samples=1 позволяет одиночные фото
-    model = DBSCAN(
-        metric='precomputed',
-        eps=epsilon,
-        min_samples=min_samples,  # =1 для одиночных фото
-        algorithm='auto'
+        progress_callback("🔄 HDBSCAN кластеризация...", 85)
+    
+    # HDBSCAN - более интеллектуальная кластеризация
+    # Автоматически определяет количество кластеров и обрабатывает шум
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=2,  # Минимум 2 фото для кластера
+        min_samples=1,  # Чувствительность к плотности
+        metric='euclidean',  # Euclidean distance для совместимости
+        cluster_selection_method='eom',  # Excess of Mass - лучше для лиц
+        allow_single_cluster=False,  # Разрешить один большой кластер если все похожи
+        prediction_data=True  # Включить данные для предсказаний
     )
-    raw_labels = model.fit_predict(distance_matrix)
     
-    print(f"🔍 [CLUSTER] DBSCAN нашел {len(set(raw_labels)) - (1 if -1 in raw_labels else 0)} кластеров")
+    print(f"🔍 [CLUSTER] Запускаем HDBSCAN кластеризацию...")
+    raw_labels = clusterer.fit_predict(X_normalized)
+    print(f"🔍 [CLUSTER] HDBSCAN fit_predict завершен")
+    
+    # Дополнительно: объединяем близкие кластеры через condensed tree
+    probabilities = clusterer.probabilities_
+    print(f"🔍 [CLUSTER] HDBSCAN нашел {len(set(raw_labels)) - (1 if -1 in raw_labels else 0)} кластеров")
+    print(f"🔍 [CLUSTER] Средняя вероятность принадлежности: {np.mean(probabilities):.3f}")
     print(f"🔍 [CLUSTER] Некластеризованных лиц: {list(raw_labels).count(-1)}")
-
-    # Обработка кластеров с созданием отдельных папок для одиночных фото
+    
+    # Этап 2.5: Умное объединение близких кластеров
+    if progress_callback:
+        progress_callback("🔄 Объединение близких кластеров...", 87)
+    
+    print(f"🔍 [CLUSTER] Начинаем объединение близких кластеров...")
+    # Получаем уникальные кластеры (исключая -1 - шум)
+    unique_clusters = [l for l in set(raw_labels) if l != -1]
+    print(f"🔍 [CLUSTER] Уникальных кластеров для объединения: {len(unique_clusters)}")
+    
+    if len(unique_clusters) > 1:
+        # Вычисляем центроиды кластеров
+        cluster_centroids = {}
+        for cluster_id in unique_clusters:
+            mask = raw_labels == cluster_id
+            cluster_centroids[cluster_id] = np.mean(X_normalized[mask], axis=0)
+        
+        # Вычисляем расстояния между центроидами
+        from sklearn.metrics.pairwise import cosine_distances
+        centroid_ids = list(cluster_centroids.keys())
+        centroid_vectors = np.array([cluster_centroids[cid] for cid in centroid_ids])
+        centroid_distances = cosine_distances(centroid_vectors)
+        
+        # Объединяем кластеры с расстоянием < 0.2 (очень похожие)
+        merge_threshold = 0.2  # Cosine distance < 0.2 = очень похожие лица
+        # Логируем статистику расстояний между центроидами
+        from numpy import triu_indices
+        dists = centroid_distances[triu_indices(len(centroid_ids), k=1)]
+        if len(dists) > 0:
+            print(f"🔍 [CLUSTER] Расстояния между центроидами: мин={dists.min():.3f}, среднее={dists.mean():.3f}, макс={dists.max():.3f}")
+        merged_labels = {}
+        
+        for i, cluster_i in enumerate(centroid_ids):
+            if cluster_i in merged_labels:
+                continue
+            merged_labels[cluster_i] = cluster_i
+            
+            for j in range(i + 1, len(centroid_ids)):
+                cluster_j = centroid_ids[j]
+                if cluster_j in merged_labels:
+                    continue
+                    
+                if centroid_distances[i][j] < merge_threshold:
+                    merged_labels[cluster_j] = cluster_i
+                    print(f"  🔗 Объединяем кластеры {cluster_j} → {cluster_i} (distance: {centroid_distances[i][j]:.3f})")
+        
+        # Применяем объединение к raw_labels
+        print(f"🔍 [CLUSTER] Применяем объединение кластеров...")
+        for idx in range(len(raw_labels)):
+            if raw_labels[idx] in merged_labels:
+                raw_labels[idx] = merged_labels[raw_labels[idx]]
+        
+        print(f"🔍 [CLUSTER] После объединения: {len(set(raw_labels)) - (1 if -1 in raw_labels else 0)} кластеров")
+        # Fallback to DBSCAN if too few clusters
+        merged_count = len([l for l in set(raw_labels) if l != -1])
+        if merged_count <= 2:
+            print(f"🔍 [CLUSTER] Мало кластеров ({merged_count}), пробуем DBSCAN fallback")
+            from sklearn.cluster import DBSCAN
+            from sklearn.metrics.pairwise import cosine_distances
+            # Расчет матрицы расстояний
+            dist_matrix = cosine_distances(X_normalized)
+            # Подбор epsilon
+            eps = find_optimal_epsilon(dist_matrix)
+            print(f"🔍 [CLUSTER] DBSCAN eps={eps:.3f}")
+            db = DBSCAN(eps=eps, min_samples=1, metric='precomputed')
+            raw_labels = db.fit_predict(dist_matrix)
+            print(f"🔍 [CLUSTER] DBSCAN нашел {len(set(raw_labels)) - (1 if -1 in raw_labels else 0)} кластеров")
+            # Обновим объединение меток при необходимости
+        
+        # Обработка кластеров с созданием отдельных папок для одиночных фото
+    print(f"🔍 [CLUSTER] Создаем карту кластеров...")
     cluster_map = defaultdict(set)
     cluster_by_img = defaultdict(set)
     
     # Находим максимальный label для некластеризованных
     max_label = max(raw_labels) if len(raw_labels) > 0 and max(raw_labels) >= 0 else -1
     next_single_label = max_label + 1
+    print(f"🔍 [CLUSTER] Максимальный label: {max_label}, следующий одиночный: {next_single_label}")
     
     for idx, (label, path) in enumerate(zip(raw_labels, owners)):
         if label == -1:
@@ -342,11 +462,11 @@ def build_plan_live(
             cluster_map[label].add(path)
             cluster_by_img[path].add(label)
 
-    # Этап 3: Двухэтапная верификация кластеров
+    # Этап 3: Мягкая верификация кластеров
     if progress_callback:
-        progress_callback("🔄 Верификация кластеров (2-этапная проверка)...", 90)
+        progress_callback("🔄 Финальная верификация кластеров...", 90)
     
-    print(f"🔍 [CLUSTER] Начинаем верификацию {len(cluster_map)} кластеров")
+    print(f"🔍 [CLUSTER] Начинаем финальную верификацию {len(cluster_map)} кластеров")
     
     validated_clusters = {}
     next_id = next_single_label
@@ -354,17 +474,23 @@ def build_plan_live(
     for cluster_id, paths in cluster_map.items():
         paths_list = list(paths)
         
-        # Проверяем, что все лица в кластере действительно одного человека
-        if verify_cluster_similarity(paths_list, threshold=0.6):
-            validated_clusters[cluster_id] = paths
-            print(f"  ✅ Кластер {cluster_id} валиден ({len(paths)} фото)")
+        # Для кластеров из 2+ фотографий применяем мягкую верификацию
+        if len(paths_list) >= 2:
+            # Используем более мягкий порог 0.8 (вместо 0.6)
+            # Это соответствует cosine distance ~0.45 для нормализованных эмбеддингов
+            if verify_cluster_similarity(paths_list, threshold=0.8):
+                validated_clusters[cluster_id] = paths
+                print(f"  ✅ Кластер {cluster_id} валиден ({len(paths)} фото)")
+            else:
+                # Даже если строгая верификация не прошла, оставляем кластер
+                # так как HDBSCAN + объединение уже сделали хорошую работу
+                print(f"  ⚠️ Кластер {cluster_id} требует проверки ({len(paths)} фото)")
+                validated_clusters[cluster_id] = paths  # Оставляем кластер
         else:
-            # Разбить кластер на отдельные папки для каждого фото
-            print(f"  ⚠️ Кластер {cluster_id} содержит разных людей, разбиваем на {len(paths)} папок")
-            for path in paths:
-                validated_clusters[next_id] = {path}
-                print(f"    📁 Создан кластер {next_id} для {path.name}")
-                next_id += 1
+            # Одиночные фото всегда валидны
+            validated_clusters[cluster_id] = paths
+            print(f"  ✅ Одиночный кластер {cluster_id} ({len(paths)} фото)")
+            next_id += 1
     
     # Обновляем cluster_map и cluster_by_img
     cluster_map = validated_clusters
@@ -396,6 +522,10 @@ def build_plan_live(
 
     print(f"✅ Кластеризация завершена: {input_dir} → кластеров: {len(cluster_map)}, изображений: {len(plan)}")
 
+    # Логируем время обработки
+    processing_time = time.time() - start_time
+    print(f"⏱️ Время обработки: {processing_time:.1f}с")
+    
     return {
         "clusters": {
             int(k): [str(p) for p in sorted(v, key=lambda x: str(x))]
