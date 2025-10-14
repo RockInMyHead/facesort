@@ -24,7 +24,7 @@ import re
 from io import BytesIO
 
 # Импортируем Windows-совместимую версию
-from cluster_windows import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS
+from cluster-windows import build_plan_live, distribute_to_folders, process_group_folder, IMG_EXTS
 
 app = FastAPI(title="Кластеризация лиц (Windows)", description="API для кластеризации лиц и распределения по группам - Windows версия")
 
