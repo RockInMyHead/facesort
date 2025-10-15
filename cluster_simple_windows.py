@@ -100,6 +100,16 @@ def build_plan_simple(
         image_files.extend(input_dir.glob(f"*{ext}"))
         image_files.extend(input_dir.glob(f"*{ext.upper()}"))
     
+    # Отладочная информация
+    print(f"🔍 [DEBUG] Папка: {input_dir}")
+    print(f"🔍 [DEBUG] Существует: {input_dir.exists()}")
+    print(f"🔍 [DEBUG] Содержимое папки:")
+    try:
+        for item in input_dir.iterdir():
+            print(f"  - {item.name} ({'файл' if item.is_file() else 'папка'})")
+    except Exception as e:
+        print(f"  ❌ Ошибка чтения папки: {e}")
+    
     if progress_callback:
         progress_callback(0, f"📂 Найдено {len(image_files)} изображений")
     
