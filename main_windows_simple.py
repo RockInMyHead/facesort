@@ -157,9 +157,15 @@ async def get_image_preview(path: str, size: int = 150):
                 raise HTTPException(status_code=403, detail="Нет доступа к файлу")
             raise
         
-        img = cv2.imread(str(image_path))
-        if img is None:
-            raise HTTPException(status_code=400, detail="Не удалось загрузить изображение")
+        # Windows-safe загрузка изображения для путей с кириллицей
+        try:
+            img_array = np.fromfile(str(image_path), dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if img is None:
+                raise HTTPException(status_code=400, detail="Не удалось загрузить изображение")
+        except Exception as e:
+            print(f"❌ Ошибка загрузки изображения {image_path}: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка загрузки: {e}")
         
         height, width = img.shape[:2]
         if width > height:
@@ -244,8 +250,14 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
         # Шаг 1: Построение плана кластеризации
         progress_callback(0, "🔍 Поиск лиц и извлечение эмбеддингов...")
         
-        # Используем build_plan_simple
-        plan = build_plan_simple(path, n_clusters=8, progress_callback=progress_callback)
+        # Используем build_plan_simple с обработкой ошибок
+        try:
+            plan = build_plan_simple(path, n_clusters=8, progress_callback=progress_callback)
+        except Exception as e:
+            print(f"❌ [TASK] Ошибка кластеризации: {e}")
+            import traceback
+            traceback.print_exc()
+            raise Exception(f"Ошибка при анализе изображений: {e}")
 
         if not isinstance(plan, dict) or not plan.get("cluster_map"):
             app_state["current_tasks"][task_id]["status"] = "completed"
@@ -272,9 +284,12 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
 
     except Exception as e:
         print(f"❌ [TASK] Ошибка при обработке {folder_path}: {e}")
+        import traceback
+        traceback.print_exc()
         app_state["current_tasks"][task_id]["status"] = "error"
         app_state["current_tasks"][task_id]["error"] = str(e)
         app_state["current_tasks"][task_id]["message"] = f"Ошибка: {e}"
+        app_state["current_tasks"][task_id]["progress"] = 100
 
     finally:
         # Удаляем из очереди после завершения (успех или ошибка)
@@ -299,4 +314,10 @@ if __name__ == "__main__":
     print("🚀 Запуск упрощенного сервера для Windows...")
     print("📍 Открыть: http://localhost:8000")
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    except Exception as e:
+        print(f"❌ Критическая ошибка сервера: {e}")
+        import traceback
+        traceback.print_exc()
+        raise

@@ -116,8 +116,9 @@ def build_plan_simple(
             progress_callback(progress, f"📷 Анализ: {progress}% ({i+1}/{len(image_files)})")
         
         try:
-            # Загружаем изображение
-            img = cv2.imread(str(img_path))
+            # Загружаем изображение (Windows-safe для путей с кириллицей)
+            img_array = np.fromfile(str(img_path), dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             if img is None:
                 continue
             
