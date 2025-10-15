@@ -87,7 +87,9 @@ async def get_drives():
 async def get_folder_contents(path: str):
     """Возвращает содержимое папки (подпапки и изображения)."""
     try:
-        decoded_path = path.replace('%20', ' ')
+        import urllib.parse
+        # Правильное URL декодирование
+        decoded_path = urllib.parse.unquote(path)
         folder_path = Path(decoded_path)
 
         if not folder_path.exists() or not folder_path.is_dir():
@@ -122,7 +124,9 @@ async def get_folder_contents(path: str):
 async def get_image_preview(path: str, size: int = 150):
     """Получить превью изображения."""
     try:
-        decoded_path = path.replace('%20', ' ')
+        import urllib.parse
+        # Правильное URL декодирование
+        decoded_path = urllib.parse.unquote(path)
         image_path = Path(decoded_path)
         
         if not image_path.exists() or not image_path.is_file():
@@ -182,7 +186,7 @@ async def get_queue():
     """Возвращает текущую очередь обработки."""
     return {"queue": app_state["queue"]}
 
-@app.get("/api/tasks", response_model=List[TaskStatus])
+@app.get("/api/tasks")
 async def get_tasks():
     """Возвращает статус всех текущих и завершенных задач."""
     return list(app_state["current_tasks"].values())
