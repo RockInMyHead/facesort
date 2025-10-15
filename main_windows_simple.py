@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import cv2
 import numpy as np
 from PIL import Image
+import cluster_simple_windows
 
 # Импортируем только простую версию
 from cluster_simple_windows import build_plan_simple, distribute_to_folders, process_group_folder, IMG_EXTS
@@ -94,6 +95,16 @@ async def get_folder_contents(path: str):
 
         if not folder_path.exists() or not folder_path.is_dir():
             raise HTTPException(status_code=404, detail="Папка не найдена")
+        
+        # Проверка доступа к системным папкам Windows
+        try:
+            folder_path.iterdir()
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Нет доступа к папке")
+        except OSError as e:
+            if "Access is denied" in str(e) or "Permission denied" in str(e):
+                raise HTTPException(status_code=403, detail="Нет доступа к папке")
+            raise
 
         folders = []
         images = []
@@ -134,6 +145,17 @@ async def get_image_preview(path: str, size: int = 150):
         
         if image_path.suffix.lower() not in IMG_EXTS:
             raise HTTPException(status_code=400, detail="Не является изображением")
+        
+        # Проверка доступа к файлу
+        try:
+            with open(image_path, 'rb') as f:
+                pass
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Нет доступа к файлу")
+        except OSError as e:
+            if "Access is denied" in str(e) or "Permission denied" in str(e):
+                raise HTTPException(status_code=403, detail="Нет доступа к файлу")
+            raise
         
         img = cv2.imread(str(image_path))
         if img is None:
