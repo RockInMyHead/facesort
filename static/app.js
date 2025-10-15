@@ -749,7 +749,7 @@ class PhotoClusterApp {
         }
         
         // Фильтруем только активные задачи для отображения
-        const activeTasks = tasks.filter(task => 
+        const activeTasks = (tasks || []).filter(task => 
             task.status === 'running' || task.status === 'pending'
         );
         
