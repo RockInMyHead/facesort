@@ -26,6 +26,9 @@ from cluster_simple_windows import build_plan_simple, distribute_to_folders, pro
 
 app = FastAPI(title="Кластеризация лиц", description="API для кластеризации лиц и распределения по группам")
 
+# Монтируем статические файлы
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # CORS middleware для поддержки фронтенда
 app.add_middleware(
     CORSMiddleware,
