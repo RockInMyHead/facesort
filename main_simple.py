@@ -61,6 +61,11 @@ async def root():
     """Главная страница."""
     return HTMLResponse(content=open("static/index.html", "r", encoding="utf-8").read())
 
+@app.get("/test", response_class=HTMLResponse)
+async def test():
+    """Тестовая страница."""
+    return HTMLResponse(content=open("test_server.html", "r", encoding="utf-8").read())
+
 @app.get("/api/drives")
 async def get_drives():
     """Получить список дисков."""

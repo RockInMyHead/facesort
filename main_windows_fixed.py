@@ -3,6 +3,7 @@
 """
 import asyncio
 import uuid
+import os
 from pathlib import Path
 from typing import Dict, List
 from collections import defaultdict
@@ -16,7 +17,7 @@ import functools
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 
@@ -40,9 +41,31 @@ IMG_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}
 class FolderRequest(BaseModel):
     path: str
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return {"message": "FaceSort Windows Fixed Server"}
+    """Главная страница."""
+    return HTMLResponse(content=open("static/index.html", "r", encoding="utf-8").read())
+
+@app.get("/api/drives")
+async def get_drives():
+    """Возвращает список доступных дисков/корневых папок для Windows."""
+    drives = []
+    # Для Windows
+    for i in range(ord('C'), ord('Z') + 1):
+        drive = f"{chr(i)}:\\"
+        if os.path.exists(drive):
+            drives.append({"name": drive, "path": drive})
+    
+    # Добавляем Рабочий стол и Документы
+    desktop_path = Path(os.path.join(os.path.expanduser("~"), "Desktop"))
+    documents_path = Path(os.path.join(os.path.expanduser("~"), "Documents"))
+    
+    if desktop_path.exists():
+        drives.insert(0, {"name": "Рабочий стол", "path": str(desktop_path)})
+    if documents_path.exists():
+        drives.insert(0, {"name": "Документы", "path": str(documents_path)})
+
+    return {"drives": drives}
 
 @app.get("/api/queue")
 async def get_queue():
