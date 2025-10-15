@@ -220,7 +220,7 @@ async def process_folder_task(task_id: str, folder_path: str, include_excluded: 
             executor,
             build_plan_advanced,
             path,
-            3,  # n_clusters
+            8,  # n_clusters - увеличиваем для лучшего разделения людей
             progress_callback
         )
         

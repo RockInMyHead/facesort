@@ -35,12 +35,16 @@ def imread_safe(path: Path) -> np.ndarray:
 def detect_faces_simple(img: np.ndarray) -> List[Dict]:
     """Простая детекция лиц с помощью OpenCV."""
     try:
+        print(f"🔍 Анализируем изображение размером: {img.shape}")
+        
         # Конвертируем в grayscale для детекции
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         
         # Загружаем каскад Хаара
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+        
+        print(f"🎯 Найдено лиц: {len(faces)}")
         
         results = []
         for (x, y, w, h) in faces:
@@ -184,7 +188,7 @@ def merge_single_clusters(embeddings: np.ndarray, labels: np.ndarray, merge_thre
 
 def build_plan_simple(
     input_dir: Path,
-    n_clusters: int = 3,
+    n_clusters: int = 8,
     progress_callback=None
 ) -> Dict:
     """Упрощенная кластеризация без проблемных зависимостей."""
@@ -225,6 +229,7 @@ def build_plan_simple(
             faces = detect_faces_simple(img)
             
             if not faces:
+                print(f"⚠️ Лица не найдены в {img_path.name}")
                 no_faces.append(img_path)
                 continue
             
@@ -268,11 +273,9 @@ def build_plan_simple(
     
     print(f"✅ Кластеризация завершена: {len(set(labels))} кластеров")
     
-    # Пост-обработка: объединяем похожие кластеры
-    labels = merge_similar_clusters(X, labels, merge_threshold=0.3)
-    
-    # Дополнительно: объединяем одиночные кластеры с ближайшими (смягченная логика)
-    labels = merge_single_clusters(X, labels, merge_threshold=0.6)
+    # Отключаем слияние кластеров для лучшего разделения людей
+    # labels = merge_similar_clusters(X, labels, merge_threshold=0.1)
+    # labels = merge_single_clusters(X, labels, merge_threshold=0.2)
     
     print(f"✅ После слияния: {len(set(labels))} кластеров")
     
