@@ -1,0 +1,14 @@
+# Minimal dependencies for Windows
+# Use this if requirements-windows.txt still has issues
+
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pillow
+psutil
+numpy
+opencv-python
+scikit-learn
+hdbscan
+mediapipe

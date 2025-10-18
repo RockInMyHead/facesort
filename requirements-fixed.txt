@@ -1,0 +1,41 @@
+# Обновленные зависимости с исправленными конфликтами
+# Используйте этот файл если у вас проблемы с конфликтами зависимостей
+
+# Основные зависимости
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+pillow==10.1.0
+psutil==5.9.6
+
+# Машинное обучение и обработка изображений
+numpy==1.26.4
+opencv-python==4.8.1.78
+opencv-contrib-python==4.11.0.86
+scikit-learn==1.3.2
+hdbscan==0.8.33
+
+# Распознавание лиц
+face-recognition==1.3.0
+face_recognition_models==0.3.0
+dlib==20.0.0
+
+# MediaPipe для альтернативного распознавания лиц
+mediapipe==0.10.21
+protobuf==4.25.8
+
+# Дополнительные зависимости
+absl-py==2.3.1
+attrs==25.4.0
+cffi==2.0.0
+sounddevice==0.5.2
+sentencepiece==0.2.1
+opt-einsum==3.4.0
+
+# JAX для MediaPipe
+jax==0.7.1
+jaxlib==0.7.1
+
+# Визуализация
+matplotlib==3.10.7
