@@ -431,18 +431,19 @@ def distribute_to_folders(plan: dict, base_dir: Path, cluster_start: int = 1, pr
 
     # В режиме ОБЩАЯ создаем пустые папки для всех найденных кластеров + 2 дополнительные
     if common_mode:
-        # Создаем папки для всех найденных кластеров
-        for cid in used_clusters:
-            empty_folder = base_dir / str(cid)
+        # Создаем папки для всех найденных кластеров с использованием перенумерации
+        for old_cid in used_clusters:
+            new_cid = cluster_id_map[old_cid]
+            empty_folder = base_dir / str(new_cid)
             empty_folder.mkdir(parents=True, exist_ok=True)
-            print(f"📁 Создана пустая папка для кластера: {cid}")
+            print(f"📁 Создана пустая папка для кластера: {new_cid}")
         
         # Создаем 2 дополнительные пустые папки
-        max_cluster_id = max(used_clusters) if used_clusters else cluster_start - 1
+        max_mapped_cluster_id = max(cluster_id_map.values()) if cluster_id_map else cluster_start - 1
         for i in range(1, 3):  # Создаем 2 дополнительные папки
-            extra_folder = base_dir / str(max_cluster_id + i)
+            extra_folder = base_dir / str(max_mapped_cluster_id + i)
             extra_folder.mkdir(parents=True, exist_ok=True)
-            print(f"📁 Создана дополнительная пустая папка: {max_cluster_id + i}")
+            print(f"📁 Создана дополнительная пустая папка: {max_mapped_cluster_id + i}")
 
     return moved, copied, cluster_start + len(used_clusters)
 
