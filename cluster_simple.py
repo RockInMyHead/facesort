@@ -333,6 +333,15 @@ def distribute_to_folders(plan: dict, base_dir: Path, cluster_start: int = 1, pr
     moved_paths = set()
 
     used_clusters = sorted({c for item in plan.get("plan", []) for c in item["cluster"]})
+    # В режиме ОБЩАЯ получаем все кластеры из данных кластеризации
+    all_clusters = set()
+    if common_mode and "clusters" in plan:
+        all_clusters = set(plan["clusters"].keys())
+        # Преобразуем строковые ключи в int
+        all_clusters = {int(k) for k in all_clusters if k.isdigit()}
+        # Объединяем с used_clusters
+        used_clusters = sorted(set(used_clusters) | all_clusters)
+    
     cluster_id_map = {old: cluster_start + idx for idx, old in enumerate(used_clusters)}
 
     plan_items = plan.get("plan", [])
